@@ -8,7 +8,8 @@
         Title="Window1" Height="402" Width="600"
         Background="Transparent"
         Foreground="{DynamicResource ForegroundBrush}"
-        ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True">
+        ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"
+        WindowStartupLocation="Manual">
     <!-- 최상위 Border에 CornerRadius 적용 -->
     <Border BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
             Background="{DynamicResource WindowBackgroundBrush}"
@@ -39,7 +40,7 @@
                 <Grid>
                     <Button x:Name="textsharp" Content="글꼴" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0" Background="{DynamicResource ContextMenuBorderBrush}" Width="71" Click="textsharp_Click"/>
                     <Button x:Name="addTab" Content="탭 추가" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,287,0,0" Background="{DynamicResource ContextMenuBorderBrush}" Width="93" Click="addTab_Click"/>
-                    <TextBlock x:Name="versionText" Text="버전: 1.0.0" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,330,0,0" FontWeight="Bold" FontSize="14" Foreground="{DynamicResource ForegroundBrush}"/>
+                    <TextBlock x:Name="versionText" Text="버전: 1.0.1" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,330,0,0" FontWeight="Bold" FontSize="14" Foreground="{DynamicResource ForegroundBrush}"/>
                     <Button x:Name="clear" Content="버튼초기화" HorizontalAlignment="Left" Height="25" Margin="492,331,0,0" VerticalAlignment="Top" Width="94" FontSize="12" Background="#FFFF9A9A" BorderBrush="#FFFF9A9A" FontWeight="Bold" Click="clear_Click"/>
                 </Grid>
             </Border>

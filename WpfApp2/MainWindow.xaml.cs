@@ -256,15 +256,18 @@ namespace WpfApp2
             if (this.Visibility != Visibility.Visible)
                 return;
 
-            // 이미 열려있는 Window1이 있으면 포커스
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] WindowState={WindowState}, Before creating Window1: Left={Left}, Top={Top}, Width={ActualWidth}, Height={ActualHeight}");
+
+            // 이미 열려있는 Window1이 있으면 닫고 새로 생성
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
                 if (win is Window1 w1 && w1.IsVisible)
                 {
-                    w1.Activate();
-                    return;
+                    w1.Close();
+                    break;
                 }
             }
+
             var win1 = new Window1();
             win1.Owner = this;
             win1.Show();

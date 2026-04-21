@@ -21,22 +21,30 @@ namespace WpfApp2
     /// </summary>
     public partial class Window1 : Window
     {
-        public Window1(Window owner)
+        public Window1()
         {
             InitializeComponent();
-            Owner = owner;
-            WindowStartupLocation = WindowStartupLocation.Manual;
-
-            // 메인윈도우 중앙에 위치
-            if (owner != null)
-            {
-                Left = owner.Left + (owner.Width - Width) / 2;
-                Top = owner.Top + (owner.Height - Height) / 2;
-            }
+            SourceInitialized += Window1_SourceInitialized;
         }
 
-        // 기존 생성자도 필요하다면 추가
-        public Window1() : this(System.Windows.Application.Current.MainWindow) { }
+        private void Window1_SourceInitialized(object sender, EventArgs e)
+        {
+            // Owner가 설정되어 있으면 Owner 중앙에 배치
+            // SourceInitialized는 창이 생성되었지만 아직 표시되기 전에 발생
+            if (Owner != null)
+            {
+                // Width와 Height는 XAML에서 명시적으로 설정되어 있으므로 사용 가능
+                double centerX = Owner.Left + (Owner.ActualWidth - Width) / 2;
+                double centerY = Owner.Top + (Owner.ActualHeight - Height) / 2;
+
+                System.Diagnostics.Debug.WriteLine($"Owner: Left={Owner.Left}, Top={Owner.Top}, Width={Owner.ActualWidth}, Height={Owner.ActualHeight}");
+                System.Diagnostics.Debug.WriteLine($"Window1: Width={Width}, Height={Height}");
+                System.Diagnostics.Debug.WriteLine($"Calculated: Left={centerX}, Top={centerY}");
+
+                Left = centerX;
+                Top = centerY;
+            }
+        }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {

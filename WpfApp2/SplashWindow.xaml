@@ -1,0 +1,31 @@
+<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WpfApp2.SplashWindow"
+        Title="시작 중" Height="150" Width="350"
+        Background="Transparent"
+        ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"
+        WindowStartupLocation="CenterScreen">
+    <Border BorderBrush="#3C3C3C" BorderThickness="1"
+            Background="#2B2B2B"
+            CornerRadius="12">
+        <StackPanel VerticalAlignment="Center" Margin="20">
+            <TextBlock Text="업데이트 확인 중..." 
+                       Foreground="White" 
+                       FontSize="16" 
+                       FontWeight="SemiBold"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,15"/>
+            <ProgressBar IsIndeterminate="True" 
+                         Height="8" 
+                         Foreground="#4CAF50"
+                         Background="#1E1E1E"/>
+            <TextBlock x:Name="StatusText"
+                       Text="잠시만 기다려주세요..."
+                       Foreground="#AAAAAA"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       Margin="0,10,0,0"/>
+        </StackPanel>
+    </Border>
+</Window>
