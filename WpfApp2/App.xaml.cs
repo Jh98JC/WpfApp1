@@ -1,5 +1,6 @@
 ﻿using System.Configuration;
 using System.Data;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,6 +16,7 @@ namespace WpfApp2
         private DateTime updateCheckStartTime;
         private SplashWindow? splashWindow;
         private static Mutex? mutex;
+        private const string UpdateFlagFile = "update_completed.flag";
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -31,6 +33,9 @@ namespace WpfApp2
 
             base.OnStartup(e);
 
+            // 업데이트 완료 플래그 확인
+            CheckUpdateCompletedFlag();
+
             // 스플래시 창 표시
             splashWindow = new SplashWindow();
             splashWindow.Show();
@@ -44,6 +49,9 @@ namespace WpfApp2
             // 업데이트 확인 이벤트 구독
             AutoUpdater.CheckForUpdateEvent += AutoUpdater_CheckForUpdateEvent;
 
+            // 업데이트 적용 이벤트 구독 (업데이트 다운로드 및 실행 직전)
+            AutoUpdater.ApplicationExitEvent += AutoUpdater_ApplicationExitEvent;
+
             // 시작 시간 기록
             updateCheckStartTime = DateTime.Now;
 
@@ -53,6 +61,61 @@ namespace WpfApp2
             string updateUrl = $"https://raw.githubusercontent.com/{githubUser}/{githubRepo}/main/updates/update.xml";
 
             AutoUpdater.Start(updateUrl);
+        }
+
+        private void CheckUpdateCompletedFlag()
+        {
+            try
+            {
+                string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+
+                if (File.Exists(flagPath))
+                {
+                    // 플래그 파일 읽기
+                    string[] lines = File.ReadAllLines(flagPath);
+                    if (lines.Length >= 3)
+                    {
+                        string version = lines[0];
+                        string changelog = lines[1];
+                        string changelogUrl = lines[2];
+
+                        // 플래그 파일 삭제
+                        File.Delete(flagPath);
+
+                        // 메인 윈도우가 로드된 후 변경 로그 표시
+                        this.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            var changelogWindow = new ChangelogWindow(version, changelog, changelogUrl);
+                            changelogWindow.Show();
+                        }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    }
+                }
+            }
+            catch
+            {
+                // 오류 무시
+            }
+        }
+
+        private void AutoUpdater_ApplicationExitEvent()
+        {
+            // 업데이트 시작 전에 플래그 파일 생성
+            try
+            {
+                string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+
+                // 버전 정보 저장 (업데이트 정보는 AutoUpdater에서 가져올 수 없으므로 기본 값 사용)
+                File.WriteAllLines(flagPath, new string[]
+                {
+                    "업데이트 버전",
+                    "• 새로운 기능 및 개선 사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선\n• 중복 실행 방지 기능 추가",
+                    "https://github.com/Jh98JC/WpfApp1/releases"
+                });
+            }
+            catch
+            {
+                // 오류 무시
+            }
         }
 
         private async void AutoUpdater_CheckForUpdateEvent(UpdateInfoEventArgs args)
