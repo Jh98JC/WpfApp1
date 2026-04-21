@@ -23,7 +23,7 @@ namespace WpfApp2
             // GitHub Releases를 사용한 자동 업데이트
             // TODO: 'YOUR-USERNAME'과 'YOUR-REPO-NAME'을 실제 GitHub 저장소 정보로 변경하세요
             string githubUser = "Jh98JC";        // 예: 
-            string githubRepo = "WpfApp2";       // 예: 
+            string githubRepo = "WpfApp1";       // 예: 
             string updateUrl = $"https://raw.githubusercontent.com/{githubUser}/{githubRepo}/main/updates/update.xml";
 
             AutoUpdater.Start(updateUrl);

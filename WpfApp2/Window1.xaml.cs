@@ -443,7 +443,7 @@ namespace WpfApp2
             {
                 // App.xaml.cs와 동일한 GitHub 정보 사용
                 string githubUser = "Jh98JC";
-                string githubRepo = "WpfApp2";
+                string githubRepo = "WpfApp1";
                 string updateUrl = $"https://raw.githubusercontent.com/{githubUser}/{githubRepo}/main/updates/update.xml";
 
                 // 업데이트 체크 전 사용자에게 알림
