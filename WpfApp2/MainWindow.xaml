@@ -56,20 +56,19 @@
             Background="{DynamicResource WindowBackgroundBrush}"
             CornerRadius="16">
         <DockPanel>
-            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" Background="{DynamicResource WindowBackgroundBrush}" Width="198" HorizontalAlignment="Right">
+            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" Background="{DynamicResource WindowBackgroundBrush}" Width="1099" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                 <Grid Height="32" Margin="0,0,2,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="120"/>
+                        <ColumnDefinition Width="80"/>
                     </Grid.ColumnDefinitions>
                     <Button x:Name="setbtn"
                             Content="Setting"
                             Width="69" Height="24"
                             HorizontalAlignment="Left"
-                            VerticalAlignment="Top"
-                            Margin="0,6,0,0"
+                            Margin="921,5,0,3"
                             Background="{DynamicResource StatusBarBackgroundBrush}"
                             FontWeight="Bold"
                             Foreground="White"
@@ -87,9 +86,8 @@
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="120" Margin="0,0,3,0">
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="80" Margin="0,0,3,0">
                         <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
-                        <Button Content="☐" Style="{StaticResource TitleBarButtonStyle}" Click="MaximizeRestore_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
                         <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
                     </StackPanel>
                 </Grid>

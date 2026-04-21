@@ -536,10 +536,17 @@ namespace WpfApp2
         // TitleBar_MouseLeftButtonDown 이벤트 핸들러 추가
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // 창 드래그 이동 지원
+            // 드래그 이동만 지원 (최대화 기능 제거)
             if (e.ChangedButton == MouseButton.Left)
             {
-                this.DragMove();
+                try
+                {
+                    this.DragMove();
+                }
+                catch
+                {
+                    // DragMove 예외 무시 (이미 드래그 중인 경우 등)
+                }
             }
         }
 
