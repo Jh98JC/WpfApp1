@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
-  <version>1.0.0.0</version>
-  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.0.0/WpfApp2.zip</url>
-  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.0.0</changelog>
-  <mandatory>false</mandatory>
+  <version>1.0.3.0</version>
+  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.0.3/WpfApp2-v1.0.3.zip</url>
+  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.0.3</changelog>
+  <mandatory>true</mandatory>
 </item>
