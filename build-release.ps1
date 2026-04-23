@@ -3,18 +3,22 @@ param(
     [string]$Version,
     
     [Parameter(Mandatory=$false)]
-    [string]$ReleaseNotes = "- Bug fixes and improvements"
+    [string]$ReleaseNotes = "- 새로운 기능 및 개선 사항`n- 버그 수정 및 성능 개선"
 )
 
-Write-Host "=== WpfApp2 Release Build & Deploy ===" -ForegroundColor Cyan
-Write-Host "Version: $Version" -ForegroundColor Green
-Write-Host ""
+$ErrorActionPreference = "Stop"
 
+$updateXml = "updates\update.xml"
+$projectDir = "WpfApp2"
 $publishDir = "publish\v$Version"
 $zipFile = "publish\WpfApp2-v$Version.zip"
-$updateXml = "updates\update.xml"
 
-# 1. Update version in update.xml
+Write-Host ""
+Write-Host "=== WpfApp2 Release Build & Deploy ===" -ForegroundColor Cyan
+Write-Host "Version: $Version" -ForegroundColor Cyan
+Write-Host ""
+
+# 1. Update update.xml
 Write-Host "[1/5] Updating update.xml..." -ForegroundColor Yellow
 $xmlContent = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -25,12 +29,17 @@ $xmlContent = @"
   <mandatory>true</mandatory>
 </item>
 "@
-[IO.File]::WriteAllText($updateXml, $xmlContent)
+
+$encoding = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($updateXml, $xmlContent, $encoding)
 Write-Host "  OK update.xml updated to v$Version" -ForegroundColor Green
 
-# 2. Release Build
+# 2. Build Release
 Write-Host "[2/5] Building Release..." -ForegroundColor Yellow
-dotnet publish WpfApp2\WpfApp2.csproj -c Release -r win-x64 --self-contained false -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
+if (Test-Path $publishDir) {
+    Remove-Item -Recurse -Force $publishDir
+}
+dotnet publish $projectDir -c Release -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  X Build failed" -ForegroundColor Red
     exit 1
@@ -46,9 +55,9 @@ Compress-Archive -Path "$publishDir\*" -DestinationPath $zipFile -CompressionLev
 $zipSize = (Get-Item $zipFile).Length / 1MB
 Write-Host "  OK ZIP created: $([math]::Round($zipSize, 2)) MB" -ForegroundColor Green
 
-# 4. Git commit & push
+# 4. Git commit & push (모든 변경사항 커밋)
 Write-Host "[4/5] Committing to Git..." -ForegroundColor Yellow
-git add $updateXml
+git add -A
 $commitMsg = "Release v$Version"
 git commit -m $commitMsg
 if ($LASTEXITCODE -eq 0) {
@@ -60,13 +69,13 @@ if ($LASTEXITCODE -eq 0) {
         Write-Host "  ! Push failed (continuing anyway...)" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  ! Nothing to commit (update.xml unchanged)" -ForegroundColor Yellow
+    Write-Host "  ! Nothing to commit (all files unchanged)" -ForegroundColor Yellow
 }
 
 # 5. Create GitHub Release
 Write-Host "[5/5] Creating GitHub Release..." -ForegroundColor Yellow
-Start-Sleep -Seconds 2  # GitHub에 커밋 반영 대기
-gh release delete "v$Version" --yes 2>$null  # 기존 릴리즈 삭제 (있으면)
+Start-Sleep -Seconds 2
+gh release delete "v$Version" --yes 2>$null
 gh release create "v$Version" $zipFile --title "v$Version" --notes $ReleaseNotes
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  OK Release created!" -ForegroundColor Green
@@ -77,10 +86,6 @@ if ($LASTEXITCODE -eq 0) {
 
 Write-Host ""
 Write-Host "=== Deployment Complete! ===" -ForegroundColor Cyan
-Write-Host ""
 Write-Host "Release URL: https://github.com/Jh98JC/WpfApp1/releases/tag/v$Version" -ForegroundColor White
 Write-Host "ZIP file: $zipFile" -ForegroundColor White
 Write-Host ""
-
-# Open folder
-explorer.exe publish

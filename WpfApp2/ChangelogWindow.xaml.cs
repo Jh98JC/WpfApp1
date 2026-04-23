@@ -46,24 +46,42 @@ namespace WpfApp2
         {
             try
             {
+                // GitHub 릴리즈 URL에서 태그 추출
+                // url 형식: https://github.com/Jh98JC/WpfApp1/releases/tag/v1.0.9
+                var parts = url.Split('/');
+                var tag = parts[^1];  // 마지막 부분: v1.0.9
+
+                // GitHub API URL 구성
+                var apiUrl = $"https://api.github.com/repos/Jh98JC/WpfApp1/releases/tags/{tag}";
+
                 using (var client = new System.Net.Http.HttpClient())
                 {
                     client.DefaultRequestHeaders.Add("User-Agent", "WpfApp2-Updater");
-                    var response = await client.GetStringAsync(url);
+                    var jsonResponse = await client.GetStringAsync(apiUrl);
 
-                    // 간단한 변경로그 표시 (GitHub Release 페이지를 열 수 있는 버튼 제공)
+                    // JSON에서 body 필드 추출
+                    var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonResponse);
+                    var body = jsonDoc.RootElement.GetProperty("body").GetString();
+
                     Dispatcher.Invoke(() =>
                     {
-                        ChangelogText.Text = $"자세한 변경 내용을 보려면 '변경 로그 보기' 버튼을 클릭하세요.\n\n" +
-                                            $"• 새로운 기능 및 개선 사항\n" +
-                                            $"• 버그 수정 및 성능 개선\n" +
-                                            $"• 사용자 경험 향상";
+                        if (!string.IsNullOrWhiteSpace(body))
+                        {
+                            ChangelogText.Text = body;
+                        }
+                        else
+                        {
+                            ChangelogText.Text = "• 새로운 기능 및 개선 사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선";
+                        }
                     });
                 }
             }
             catch
             {
-                ChangelogText.Text = "• 새로운 기능 및 개선 사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선";
+                Dispatcher.Invoke(() =>
+                {
+                    ChangelogText.Text = "• 새로운 기능 및 개선 사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선";
+                });
             }
         }
 

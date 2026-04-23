@@ -19,6 +19,7 @@ namespace WpfApp2
         private const string UpdateFlagFile = "update_completed.flag";
         private MainWindow? mainWindow;  // 메인 윈도우 인스턴스 저장
         private string? pendingUpdateVersion;  // 업데이트될 버전 저장
+        private string? pendingChangelogUrl;  // 업데이트 변경로그 URL 저장
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -115,9 +116,15 @@ namespace WpfApp2
 
                 if (File.Exists(flagPath))
                 {
-                    // 플래그 파일에서 버전 정보 읽기
-                    string versionInfo = File.ReadAllText(flagPath);
-                    System.Diagnostics.Debug.WriteLine($"플래그 파일 내용: {versionInfo}");
+                    // 플래그 파일에서 버전|URL 정보 읽기
+                    string flagContent = File.ReadAllText(flagPath);
+                    System.Diagnostics.Debug.WriteLine($"플래그 파일 내용: {flagContent}");
+
+                    // 버전과 URL 분리
+                    var parts = flagContent.Split('|');
+                    string versionInfo = parts.Length > 0 ? parts[0] : "Unknown";
+                    string changelogUrl = parts.Length > 1 ? parts[1] : "";
+
                     File.Delete(flagPath);
                     System.Diagnostics.Debug.WriteLine("플래그 파일 삭제됨");
 
@@ -133,8 +140,8 @@ namespace WpfApp2
 
                             if (mainWindow != null && mainWindow.IsVisible)
                             {
-                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}");
-                                var changelogWindow = new ChangelogWindow(versionInfo)
+                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}, URL: {changelogUrl}");
+                                var changelogWindow = new ChangelogWindow(versionInfo, null, changelogUrl)
                                 {
                                     Owner = mainWindow,
                                     WindowStartupLocation = WindowStartupLocation.CenterOwner
@@ -166,13 +173,16 @@ namespace WpfApp2
                 var item = xml.Element("item");
 
                 var newVersion = item.Element("version")?.Value;
+                var changelogUrl = item.Element("changelog")?.Value;
+
                 pendingUpdateVersion = newVersion;  // 새 버전 저장
+                pendingChangelogUrl = changelogUrl;  // 변경로그 URL 저장
 
                 args.UpdateInfo = new UpdateInfoEventArgs
                 {
                     CurrentVersion = newVersion,
                     DownloadURL = item.Element("url")?.Value,
-                    ChangelogURL = item.Element("changelog")?.Value,
+                    ChangelogURL = changelogUrl,
                     Mandatory = new Mandatory
                     {
                         Value = bool.Parse(item.Element("mandatory")?.Value ?? "false")
@@ -215,13 +225,15 @@ namespace WpfApp2
             System.Diagnostics.Debug.WriteLine("=== ApplicationExitEvent 호출됨 ===");
             System.Diagnostics.Debug.WriteLine("업데이트를 위해 애플리케이션을 종료합니다.");
 
-            // 업데이트 완료 플래그 생성 (새 버전 정보 저장)
+            // 업데이트 완료 플래그 생성 (버전과 변경로그 URL 저장)
             try
             {
                 string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
-                // 업데이트될 버전 정보를 저장 (ParseUpdateInfoEvent에서 저장한 값)
-                File.WriteAllText(flagPath, pendingUpdateVersion ?? "Unknown");
-                System.Diagnostics.Debug.WriteLine($"플래그 파일 생성: {flagPath}, 버전: {pendingUpdateVersion}");
+                // 버전|URL 형식으로 저장
+                string flagContent = $"{pendingUpdateVersion ?? "Unknown"}|{pendingChangelogUrl ?? ""}";
+                File.WriteAllText(flagPath, flagContent);
+                System.Diagnostics.Debug.WriteLine($"플래그 파일 생성: {flagPath}");
+                System.Diagnostics.Debug.WriteLine($"버전: {pendingUpdateVersion}, URL: {pendingChangelogUrl}");
             }
             catch (Exception ex)
             {
