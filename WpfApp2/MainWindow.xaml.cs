@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices; // 핫키 등록용 & Win32 RECT
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -14,6 +13,15 @@ using Forms = System.Windows.Forms;
 using System.Windows.Media; // Added for brushes
 using System.Linq; // for FirstOrDefault and collection helpers
 using System.Windows.Shapes; // for Ellipse
+using LiveChartsCore;
+using LiveChartsCore.SkiaSharpView;
+using LiveChartsCore.SkiaSharpView.WPF;
+using Newtonsoft.Json;
+using System.Net.Http;
+using System.Collections.ObjectModel;
+using LiveChartsCore.SkiaSharpView.Painting;
+using SkiaSharp;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 
 namespace WpfApp2
@@ -28,6 +36,7 @@ namespace WpfApp2
         private static readonly string SettingsFile = System.IO.Path.Combine(AppDataFolder, "mainwindow_settings.json");
         private static readonly string ButtonStateFile = System.IO.Path.Combine(AppDataFolder, "button_states.json");
         private static readonly string TabStateFile = System.IO.Path.Combine(AppDataFolder, "tab_states.json");
+        private static readonly string ChartStateFile = System.IO.Path.Combine(AppDataFolder, "chart_states.json");
 
         private DispatcherTimer leaveTimer;
 
@@ -91,6 +100,7 @@ namespace WpfApp2
             // 위치 복원은 SourceInitialized에서 수행
             RestoreAllTabs(); // 탭 복원을 먼저 수행
             RestoreAllButtonStates(); // 그 다음 버튼 복원
+            RestoreAllChartStates(); // 차트 복원
             Loaded += MainWindow_Loaded;
 
             this.PreviewKeyDown += MainWindow_PreviewKeyDown; // ESC 처리
@@ -1865,6 +1875,20 @@ namespace WpfApp2
             public double Height { get; set; }
         }
 
+        private sealed class ChartMeta
+        {
+            public string ChartType { get; set; } = "Line"; // Line, Bar, Pie, Gauge
+            public string DataSource { get; set; } = "Static"; // Static, Json, Csv, Api
+            public string? DataPath { get; set; } // JSON/CSV 파일 경로 또는 API URL
+            public List<double> StaticData { get; set; } = new List<double>();
+            public List<string> Labels { get; set; } = new List<string>();
+            public double Width { get; set; } = 300;
+            public double Height { get; set; } = 200;
+            public string Title { get; set; } = "";
+            public int RefreshInterval { get; set; } = 0; // 0이면 실시간 업데이트 없음, 초 단위
+            public DispatcherTimer? RefreshTimer { get; set; }
+        }
+
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
         {
             var canvas = CurrentButtonCanvas;
@@ -2043,6 +2067,830 @@ namespace WpfApp2
             btn.PreviewMouseLeftButtonDown += Btn_PreviewMouseLeftButtonDown;
 
             SaveAllButtonStates();
+        }
+
+        private void CreateChartInBorder_Click(object sender, RoutedEventArgs e)
+        {
+            var canvas = CurrentButtonCanvas;
+            if (canvas == null) return;
+
+            // 차트 타입 선택 다이얼로그
+            var typeDlg = new System.Windows.Window
+            {
+                Title = "차트 타입 선택",
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+                SizeToContent = SizeToContent.WidthAndHeight
+            };
+            MakeBorderless(typeDlg);
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+            var lineBtn = new System.Windows.Controls.Button { Content = "Line Chart (선 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
+            var barBtn = new System.Windows.Controls.Button { Content = "Bar Chart (막대 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
+            var pieBtn = new System.Windows.Controls.Button { Content = "Pie Chart (원형 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
+            var gaugeBtn = new System.Windows.Controls.Button { Content = "Gauge (게이지)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
+            var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+
+            lineBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Line"); };
+            barBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Bar"); };
+            pieBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Pie"); };
+            gaugeBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Gauge"); };
+            cancelBtn.Click += (s, ev) => typeDlg.Close();
+
+            stack.Children.Add(lineBtn);
+            stack.Children.Add(barBtn);
+            stack.Children.Add(pieBtn);
+            stack.Children.Add(gaugeBtn);
+            stack.Children.Add(cancelBtn);
+            typeDlg.Content = stack;
+            ApplyDarkTheme(typeDlg);
+            typeDlg.ShowDialog();
+        }
+
+        private void ShowChartConfigDialog(Canvas canvas, string chartType)
+        {
+            var configDlg = new System.Windows.Window
+            {
+                Title = $"{chartType} 차트 설정",
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                Width = 450
+            };
+            MakeBorderless(configDlg);
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+
+            // 제목
+            stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 제목:", Margin = new Thickness(0, 0, 0, 4) });
+            var titleBox = new System.Windows.Controls.TextBox { Text = $"{chartType} Chart", Margin = new Thickness(0, 0, 0, 12) };
+            stack.Children.Add(titleBox);
+
+            // 크기
+            var sizePanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var widthBox = new System.Windows.Controls.TextBox { Text = "300", Width = 60, Margin = new Thickness(0, 0, 16, 0) };
+            sizePanel.Children.Add(widthBox);
+            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var heightBox = new System.Windows.Controls.TextBox { Text = "200", Width = 60 };
+            sizePanel.Children.Add(heightBox);
+            stack.Children.Add(sizePanel);
+
+            // 데이터 소스 선택
+            stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 소스:", Margin = new Thickness(0, 0, 0, 4) });
+            var sourceCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+            sourceCombo.Items.Add("정적 데이터 (수동 입력)");
+            sourceCombo.Items.Add("JSON 파일");
+            sourceCombo.Items.Add("CSV 파일");
+            sourceCombo.Items.Add("API (실시간)");
+            sourceCombo.SelectedIndex = 0;
+            stack.Children.Add(sourceCombo);
+
+            // 데이터 입력 영역 (동적으로 변경됨)
+            var dataPanel = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            stack.Children.Add(dataPanel);
+
+            // 정적 데이터 입력 UI
+            var staticDataPanel = new System.Windows.Controls.StackPanel();
+            staticDataPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 값 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
+            var dataBox = new System.Windows.Controls.TextBox { Text = "10, 25, 15, 30, 20", Margin = new Thickness(0, 0, 0, 8) };
+            staticDataPanel.Children.Add(dataBox);
+            staticDataPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "라벨 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
+            var labelBox = new System.Windows.Controls.TextBox { Text = "항목1, 항목2, 항목3, 항목4, 항목5", Margin = new Thickness(0, 0, 0, 8) };
+            staticDataPanel.Children.Add(labelBox);
+            dataPanel.Children.Add(staticDataPanel);
+
+            // 파일/API 경로 입력 UI
+            var pathPanel = new System.Windows.Controls.StackPanel { Visibility = Visibility.Collapsed };
+            pathPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "파일 경로 또는 API URL:", Margin = new Thickness(0, 0, 0, 4) });
+            var pathBox = new System.Windows.Controls.TextBox { Margin = new Thickness(0, 0, 0, 8) };
+            var browseBtn = new System.Windows.Controls.Button { Content = "파일 선택...", HorizontalAlignment = System.Windows.HorizontalAlignment.Left, Padding = new Thickness(12, 4, 12, 4) };
+            browseBtn.Click += (s, ev) =>
+            {
+                var fd = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = "JSON 파일 (*.json)|*.json|CSV 파일 (*.csv)|*.csv|모든 파일 (*.*)|*.*"
+                };
+                if (fd.ShowDialog() == true)
+                {
+                    pathBox.Text = fd.FileName;
+                }
+            };
+            pathPanel.Children.Add(pathBox);
+            pathPanel.Children.Add(browseBtn);
+            dataPanel.Children.Add(pathPanel);
+
+            // 실시간 업데이트 설정
+            var refreshPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
+            refreshPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "새로고침 간격 (초):", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var refreshBox = new System.Windows.Controls.TextBox { Text = "5", Width = 60 };
+            refreshPanel.Children.Add(refreshBox);
+            stack.Children.Add(refreshPanel);
+
+            sourceCombo.SelectionChanged += (s, ev) =>
+            {
+                int idx = sourceCombo.SelectedIndex;
+                staticDataPanel.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
+                pathPanel.Visibility = idx > 0 ? Visibility.Visible : Visibility.Collapsed;
+                browseBtn.Visibility = idx < 3 ? Visibility.Visible : Visibility.Collapsed;
+                refreshPanel.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
+            };
+
+            // 버튼
+            var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+            var createBtn = new System.Windows.Controls.Button { Content = "생성", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
+            var cancelBtn2 = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+
+            createBtn.Click += (s, ev) =>
+            {
+                try
+                {
+                    double width = double.Parse(widthBox.Text);
+                    double height = double.Parse(heightBox.Text);
+
+                    var meta = new ChartMeta
+                    {
+                        ChartType = chartType,
+                        Width = width,
+                        Height = height,
+                        Title = titleBox.Text
+                    };
+
+                    int sourceIdx = sourceCombo.SelectedIndex;
+                    switch (sourceIdx)
+                    {
+                        case 0: // 정적 데이터
+                            meta.DataSource = "Static";
+                            meta.StaticData = dataBox.Text.Split(',').Select(x => double.TryParse(x.Trim(), out var v) ? v : 0).ToList();
+                            meta.Labels = labelBox.Text.Split(',').Select(x => x.Trim()).ToList();
+                            break;
+                        case 1: // JSON
+                            meta.DataSource = "Json";
+                            meta.DataPath = pathBox.Text;
+                            break;
+                        case 2: // CSV
+                            meta.DataSource = "Csv";
+                            meta.DataPath = pathBox.Text;
+                            break;
+                        case 3: // API
+                            meta.DataSource = "Api";
+                            meta.DataPath = pathBox.Text;
+                            if (int.TryParse(refreshBox.Text, out int interval))
+                                meta.RefreshInterval = interval;
+                            break;
+                    }
+
+                    CreateChartControl(canvas, meta);
+                    configDlg.Close();
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.MessageBox.Show($"차트 생성 오류: {ex.Message}");
+                }
+            };
+
+            cancelBtn2.Click += (s, ev) => configDlg.Close();
+            btnPanel.Children.Add(createBtn);
+            btnPanel.Children.Add(cancelBtn2);
+            stack.Children.Add(btnPanel);
+
+            configDlg.Content = stack;
+            ApplyDarkTheme(configDlg);
+            configDlg.ShowDialog();
+        }
+
+        private void CreateChartControl(Canvas canvas, ChartMeta meta)
+        {
+            // Border로 차트 감싸기
+            var border = new System.Windows.Controls.Border
+            {
+                Width = meta.Width,
+                Height = meta.Height,
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
+                BorderThickness = new Thickness(1),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44)),
+                CornerRadius = new CornerRadius(8)
+            };
+
+            // 차트에 따라 LiveCharts 컨트롤 생성
+            FrameworkElement chartControl = null;
+
+            switch (meta.ChartType)
+            {
+                case "Line":
+                    chartControl = CreateLineChart(meta);
+                    break;
+                case "Bar":
+                    chartControl = CreateBarChart(meta);
+                    break;
+                case "Pie":
+                    chartControl = CreatePieChart(meta);
+                    break;
+                case "Gauge":
+                    chartControl = CreateGaugeChart(meta);
+                    break;
+            }
+
+            if (chartControl != null)
+            {
+                border.Child = chartControl;
+            }
+
+            // Canvas에 배치
+            double x = 20;
+            double y = 20;
+            System.Windows.Controls.Canvas.SetLeft(border, x);
+            System.Windows.Controls.Canvas.SetTop(border, y);
+
+            border.Tag = meta;
+
+            // 컨텍스트 메뉴 추가
+            var contextMenu = new System.Windows.Controls.ContextMenu();
+            var editItem = new System.Windows.Controls.MenuItem { Header = "차트 수정" };
+            var deleteItem = new System.Windows.Controls.MenuItem { Header = "차트 삭제" };
+            var refreshItem = new System.Windows.Controls.MenuItem { Header = "새로고침" };
+
+            editItem.Click += (s, ev) => EditChartDialog(border, canvas, meta);
+            deleteItem.Click += (s, ev) =>
+            {
+                if (System.Windows.MessageBox.Show("차트를 삭제하시겠습니까?", "확인", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+                {
+                    if (meta.RefreshTimer != null)
+                    {
+                        meta.RefreshTimer.Stop();
+                        meta.RefreshTimer = null;
+                    }
+                    canvas.Children.Remove(border);
+                    SaveAllChartStates();
+                }
+            };
+            refreshItem.Click += (s, ev) => RefreshChartData(border, meta);
+
+            contextMenu.Items.Add(editItem);
+            contextMenu.Items.Add(refreshItem);
+            contextMenu.Items.Add(deleteItem);
+            border.ContextMenu = contextMenu;
+
+            // 드래그 가능하게 설정
+            AttachChartDragHandlers(border, canvas);
+
+            canvas.Children.Add(border);
+
+            // 실시간 업데이트 타이머 설정
+            if (meta.RefreshInterval > 0 && meta.DataSource == "Api")
+            {
+                meta.RefreshTimer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(meta.RefreshInterval)
+                };
+                meta.RefreshTimer.Tick += (s, ev) => RefreshChartData(border, meta);
+                meta.RefreshTimer.Start();
+            }
+
+            SaveAllChartStates();
+        }
+
+        private CartesianChart CreateLineChart(ChartMeta meta)
+        {
+            var chart = new CartesianChart
+            {
+                Series = new ISeries[]
+                {
+                    new LineSeries<double>
+                    {
+                        Values = meta.StaticData,
+                        Fill = null,
+                        Stroke = new SolidColorPaint(SKColors.CornflowerBlue) { StrokeThickness = 3 },
+                        GeometrySize = 8
+                    }
+                },
+                XAxes = new[]
+                {
+                    new Axis
+                    {
+                        Labels = meta.Labels,
+                        LabelsRotation = 0,
+                        LabelsPaint = new SolidColorPaint(SKColors.White),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                    }
+                },
+                YAxes = new[]
+                {
+                    new Axis
+                    {
+                        LabelsPaint = new SolidColorPaint(SKColors.White),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                    }
+                },
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+            };
+
+            return chart;
+        }
+
+        private CartesianChart CreateBarChart(ChartMeta meta)
+        {
+            var chart = new CartesianChart
+            {
+                Series = new ISeries[]
+                {
+                    new ColumnSeries<double>
+                    {
+                        Values = meta.StaticData,
+                        Fill = new SolidColorPaint(SKColors.Orange),
+                        Stroke = null
+                    }
+                },
+                XAxes = new[]
+                {
+                    new Axis
+                    {
+                        Labels = meta.Labels,
+                        LabelsRotation = 0,
+                        LabelsPaint = new SolidColorPaint(SKColors.White),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                    }
+                },
+                YAxes = new[]
+                {
+                    new Axis
+                    {
+                        LabelsPaint = new SolidColorPaint(SKColors.White),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                    }
+                },
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+            };
+
+            return chart;
+        }
+
+        private PieChart CreatePieChart(ChartMeta meta)
+        {
+            var series = new List<ISeries>();
+            for (int i = 0; i < meta.StaticData.Count; i++)
+            {
+                series.Add(new PieSeries<double>
+                {
+                    Values = new[] { meta.StaticData[i] },
+                    Name = i < meta.Labels.Count ? meta.Labels[i] : $"항목{i + 1}"
+                });
+            }
+
+            var chart = new PieChart
+            {
+                Series = series,
+                LegendPosition = LiveChartsCore.Measure.LegendPosition.Right,
+                LegendTextPaint = new SolidColorPaint(SKColors.White),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+            };
+
+            return chart;
+        }
+
+        private PieChart CreateGaugeChart(ChartMeta meta)
+        {
+            double value = meta.StaticData.Count > 0 ? meta.StaticData[0] : 0;
+            double maxValue = meta.StaticData.Count > 1 ? meta.StaticData[1] : 100;
+
+            var chart = new PieChart
+            {
+                Series = new ISeries[]
+                {
+                    new PieSeries<double>
+                    {
+                        Values = new[] { value },
+                        Fill = new SolidColorPaint(SKColors.LimeGreen),
+                        DataLabelsSize = 20,
+                        DataLabelsPaint = new SolidColorPaint(SKColors.White)
+                    },
+                    new PieSeries<double>
+                    {
+                        Values = new[] { maxValue - value },
+                        Fill = new SolidColorPaint(SKColors.DarkGray)
+                    }
+                },
+                InitialRotation = -90,
+                MaxAngle = 360,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+            };
+
+            return chart;
+        }
+
+        private void AttachChartDragHandlers(Border border, Canvas canvas)
+        {
+            bool isDragging = false;
+            System.Windows.Point dragStart = new System.Windows.Point();
+            System.Windows.Point elementStart = new System.Windows.Point();
+
+            border.MouseLeftButtonDown += (s, e) =>
+            {
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+                {
+                    isDragging = true;
+                    dragStart = e.GetPosition(canvas);
+                    elementStart = new System.Windows.Point(
+                        System.Windows.Controls.Canvas.GetLeft(border),
+                        System.Windows.Controls.Canvas.GetTop(border));
+                    border.CaptureMouse();
+                    e.Handled = true;
+                }
+            };
+
+            border.MouseMove += (s, e) =>
+            {
+                if (isDragging)
+                {
+                    var current = e.GetPosition(canvas);
+                    double newX = elementStart.X + (current.X - dragStart.X);
+                    double newY = elementStart.Y + (current.Y - dragStart.Y);
+
+                    // 그리드 스냅
+                    newX = Math.Round(newX / GridSize) * GridSize;
+                    newY = Math.Round(newY / GridSize) * GridSize;
+
+                    System.Windows.Controls.Canvas.SetLeft(border, newX);
+                    System.Windows.Controls.Canvas.SetTop(border, newY);
+                }
+            };
+
+            border.MouseLeftButtonUp += (s, e) =>
+            {
+                if (isDragging)
+                {
+                    isDragging = false;
+                    border.ReleaseMouseCapture();
+                    SaveAllChartStates();
+                }
+            };
+        }
+
+        private void EditChartDialog(Border border, Canvas canvas, ChartMeta meta)
+        {
+            // 기존 ShowChartConfigDialog를 재활용하여 편집 모드로 사용
+            var configDlg = new System.Windows.Window
+            {
+                Title = $"{meta.ChartType} 차트 수정",
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                Width = 450
+            };
+            MakeBorderless(configDlg);
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+
+            // 크기 수정
+            var sizePanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var widthBox = new System.Windows.Controls.TextBox { Text = meta.Width.ToString(), Width = 60, Margin = new Thickness(0, 0, 16, 0) };
+            sizePanel.Children.Add(widthBox);
+            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var heightBox = new System.Windows.Controls.TextBox { Text = meta.Height.ToString(), Width = 60 };
+            sizePanel.Children.Add(heightBox);
+            stack.Children.Add(sizePanel);
+
+            // 데이터 수정 (정적 데이터만)
+            if (meta.DataSource == "Static")
+            {
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 값 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
+                var dataBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.StaticData), Margin = new Thickness(0, 0, 0, 8) };
+                stack.Children.Add(dataBox);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "라벨 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
+                var labelBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.Labels), Margin = new Thickness(0, 0, 0, 12) };
+                stack.Children.Add(labelBox);
+
+                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+                var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
+                var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+
+                applyBtn.Click += (s, ev) =>
+                {
+                    meta.Width = double.Parse(widthBox.Text);
+                    meta.Height = double.Parse(heightBox.Text);
+                    meta.StaticData = dataBox.Text.Split(',').Select(x => double.TryParse(x.Trim(), out var v) ? v : 0).ToList();
+                    meta.Labels = labelBox.Text.Split(',').Select(x => x.Trim()).ToList();
+
+                    border.Width = meta.Width;
+                    border.Height = meta.Height;
+
+                    // 차트 다시 생성
+                    FrameworkElement newChart = null;
+                    switch (meta.ChartType)
+                    {
+                        case "Line": newChart = CreateLineChart(meta); break;
+                        case "Bar": newChart = CreateBarChart(meta); break;
+                        case "Pie": newChart = CreatePieChart(meta); break;
+                        case "Gauge": newChart = CreateGaugeChart(meta); break;
+                    }
+                    if (newChart != null)
+                        border.Child = newChart;
+
+                    SaveAllChartStates();
+                    configDlg.Close();
+                };
+                cancelBtn.Click += (s, ev) => configDlg.Close();
+
+                btnPanel.Children.Add(applyBtn);
+                btnPanel.Children.Add(cancelBtn);
+                stack.Children.Add(btnPanel);
+            }
+            else
+            {
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "외부 데이터 소스는 새로고침 버튼을 사용하세요.", Margin = new Thickness(0, 0, 0, 12) });
+                var closeBtn = new System.Windows.Controls.Button { Content = "닫기", HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Padding = new Thickness(12, 6, 12, 6) };
+                closeBtn.Click += (s, ev) => configDlg.Close();
+                stack.Children.Add(closeBtn);
+            }
+
+            configDlg.Content = stack;
+            ApplyDarkTheme(configDlg);
+            configDlg.ShowDialog();
+        }
+
+        private async void RefreshChartData(Border border, ChartMeta meta)
+        {
+            try
+            {
+                switch (meta.DataSource)
+                {
+                    case "Json":
+                        await LoadJsonData(meta);
+                        break;
+                    case "Csv":
+                        LoadCsvData(meta);
+                        break;
+                    case "Api":
+                        await LoadApiData(meta);
+                        break;
+                }
+
+                // 차트 다시 생성
+                FrameworkElement newChart = null;
+                switch (meta.ChartType)
+                {
+                    case "Line": newChart = CreateLineChart(meta); break;
+                    case "Bar": newChart = CreateBarChart(meta); break;
+                    case "Pie": newChart = CreatePieChart(meta); break;
+                    case "Gauge": newChart = CreateGaugeChart(meta); break;
+                }
+                if (newChart != null)
+                    border.Child = newChart;
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"데이터 새로고침 오류: {ex.Message}");
+            }
+        }
+
+        private async Task LoadJsonData(ChartMeta meta)
+        {
+            if (string.IsNullOrEmpty(meta.DataPath)) return;
+
+            string json;
+            if (File.Exists(meta.DataPath))
+            {
+                json = File.ReadAllText(meta.DataPath);
+            }
+            else if (Uri.IsWellFormedUriString(meta.DataPath, UriKind.Absolute))
+            {
+                using var client = new HttpClient();
+                json = await client.GetStringAsync(meta.DataPath);
+            }
+            else
+            {
+                return;
+            }
+
+            var data = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, object>>(json);
+            if (data != null)
+            {
+                if (data.ContainsKey("values"))
+                {
+                    var values = Newtonsoft.Json.JsonConvert.DeserializeObject<List<double>>(data["values"].ToString());
+                    meta.StaticData = values ?? new List<double>();
+                }
+                if (data.ContainsKey("labels"))
+                {
+                    var labels = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(data["labels"].ToString());
+                    meta.Labels = labels ?? new List<string>();
+                }
+            }
+        }
+
+        private void LoadCsvData(ChartMeta meta)
+        {
+            if (string.IsNullOrEmpty(meta.DataPath) || !File.Exists(meta.DataPath)) return;
+
+            var lines = File.ReadAllLines(meta.DataPath);
+            if (lines.Length > 0)
+            {
+                meta.Labels = lines[0].Split(',').Select(x => x.Trim()).ToList();
+            }
+            if (lines.Length > 1)
+            {
+                meta.StaticData = lines[1].Split(',').Select(x => double.TryParse(x.Trim(), out var v) ? v : 0).ToList();
+            }
+        }
+
+        private async Task LoadApiData(ChartMeta meta)
+        {
+            if (string.IsNullOrEmpty(meta.DataPath)) return;
+
+            using var client = new HttpClient();
+            var json = await client.GetStringAsync(meta.DataPath);
+            var data = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, object>>(json);
+
+            if (data != null)
+            {
+                if (data.ContainsKey("values"))
+                {
+                    var values = Newtonsoft.Json.JsonConvert.DeserializeObject<List<double>>(data["values"].ToString());
+                    meta.StaticData = values ?? new List<double>();
+                }
+                if (data.ContainsKey("labels"))
+                {
+                    var labels = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(data["labels"].ToString());
+                    meta.Labels = labels ?? new List<string>();
+                }
+            }
+        }
+
+        private void SaveAllChartStates()
+        {
+            // 차트 상태 저장 로직 (버튼 상태 저장과 유사)
+            var allCharts = new List<object>();
+
+            for (int tabIndex = 0; tabIndex < 10; tabIndex++)
+            {
+                var canvas = GetCanvasByIndex(tabIndex);
+                if (canvas == null) continue;
+
+                foreach (UIElement child in canvas.Children)
+                {
+                    if (child is Border border && border.Tag is ChartMeta meta)
+                    {
+                        var chartData = new
+                        {
+                            TabIndex = tabIndex,
+                            X = System.Windows.Controls.Canvas.GetLeft(border),
+                            Y = System.Windows.Controls.Canvas.GetTop(border),
+                            ChartType = meta.ChartType,
+                            DataSource = meta.DataSource,
+                            DataPath = meta.DataPath,
+                            StaticData = meta.StaticData,
+                            Labels = meta.Labels,
+                            Width = meta.Width,
+                            Height = meta.Height,
+                            Title = meta.Title,
+                            RefreshInterval = meta.RefreshInterval
+                        };
+                        allCharts.Add(chartData);
+                    }
+                }
+            }
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(allCharts, Newtonsoft.Json.Formatting.Indented);
+            File.WriteAllText(ChartStateFile, json);
+        }
+
+        private void RestoreAllChartStates()
+        {
+            if (!File.Exists(ChartStateFile)) return;
+
+            try
+            {
+                var json = File.ReadAllText(ChartStateFile);
+                var chartList = Newtonsoft.Json.JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(json);
+
+                if (chartList == null) return;
+
+                foreach (var chartData in chartList)
+                {
+                    int tabIndex = Convert.ToInt32(chartData["TabIndex"]);
+                    var canvas = GetCanvasByIndex(tabIndex);
+                    if (canvas == null) continue;
+
+                    var meta = new ChartMeta
+                    {
+                        ChartType = chartData["ChartType"].ToString(),
+                        DataSource = chartData["DataSource"].ToString(),
+                        DataPath = chartData.ContainsKey("DataPath") ? chartData["DataPath"]?.ToString() : null,
+                        Width = Convert.ToDouble(chartData["Width"]),
+                        Height = Convert.ToDouble(chartData["Height"]),
+                        Title = chartData.ContainsKey("Title") ? chartData["Title"]?.ToString() ?? "" : "",
+                        RefreshInterval = chartData.ContainsKey("RefreshInterval") ? Convert.ToInt32(chartData["RefreshInterval"]) : 0
+                    };
+
+                    // StaticData 복원
+                    if (chartData.ContainsKey("StaticData"))
+                    {
+                        var staticDataJson = chartData["StaticData"].ToString();
+                        meta.StaticData = Newtonsoft.Json.JsonConvert.DeserializeObject<List<double>>(staticDataJson) ?? new List<double>();
+                    }
+
+                    // Labels 복원
+                    if (chartData.ContainsKey("Labels"))
+                    {
+                        var labelsJson = chartData["Labels"].ToString();
+                        meta.Labels = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(labelsJson) ?? new List<string>();
+                    }
+
+                    // Border 생성
+                    var border = new System.Windows.Controls.Border
+                    {
+                        Width = meta.Width,
+                        Height = meta.Height,
+                        BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
+                        BorderThickness = new Thickness(1),
+                        Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44)),
+                        CornerRadius = new CornerRadius(8),
+                        Tag = meta
+                    };
+
+                    // 위치 설정
+                    double x = Convert.ToDouble(chartData["X"]);
+                    double y = Convert.ToDouble(chartData["Y"]);
+                    System.Windows.Controls.Canvas.SetLeft(border, x);
+                    System.Windows.Controls.Canvas.SetTop(border, y);
+
+                    // 차트 컨트롤 생성
+                    FrameworkElement chartControl = null;
+                    switch (meta.ChartType)
+                    {
+                        case "Line":
+                            chartControl = CreateLineChart(meta);
+                            break;
+                        case "Bar":
+                            chartControl = CreateBarChart(meta);
+                            break;
+                        case "Pie":
+                            chartControl = CreatePieChart(meta);
+                            break;
+                        case "Gauge":
+                            chartControl = CreateGaugeChart(meta);
+                            break;
+                    }
+
+                    if (chartControl != null)
+                    {
+                        border.Child = chartControl;
+                    }
+
+                    // 컨텍스트 메뉴 추가
+                    var contextMenu = new System.Windows.Controls.ContextMenu();
+                    var editItem = new System.Windows.Controls.MenuItem { Header = "차트 수정" };
+                    var deleteItem = new System.Windows.Controls.MenuItem { Header = "차트 삭제" };
+                    var refreshItem = new System.Windows.Controls.MenuItem { Header = "새로고침" };
+
+                    editItem.Click += (s, ev) => EditChartDialog(border, canvas, meta);
+                    deleteItem.Click += (s, ev) =>
+                    {
+                        if (System.Windows.MessageBox.Show("차트를 삭제하시겠습니까?", "확인", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+                        {
+                            if (meta.RefreshTimer != null)
+                            {
+                                meta.RefreshTimer.Stop();
+                                meta.RefreshTimer = null;
+                            }
+                            canvas.Children.Remove(border);
+                            SaveAllChartStates();
+                        }
+                    };
+                    refreshItem.Click += (s, ev) => RefreshChartData(border, meta);
+
+                    contextMenu.Items.Add(editItem);
+                    contextMenu.Items.Add(refreshItem);
+                    contextMenu.Items.Add(deleteItem);
+                    border.ContextMenu = contextMenu;
+
+                    // 드래그 핸들러
+                    AttachChartDragHandlers(border, canvas);
+
+                    // Canvas에 추가
+                    canvas.Children.Add(border);
+
+                    // 실시간 업데이트 타이머 설정
+                    if (meta.RefreshInterval > 0 && meta.DataSource == "Api")
+                    {
+                        meta.RefreshTimer = new DispatcherTimer
+                        {
+                            Interval = TimeSpan.FromSeconds(meta.RefreshInterval)
+                        };
+                        meta.RefreshTimer.Tick += (s, ev) => RefreshChartData(border, meta);
+                        meta.RefreshTimer.Start();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("RestoreAllChartStates error: " + ex);
+            }
         }
 
         private Canvas? GetCanvasByIndex(int index)

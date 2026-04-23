@@ -185,6 +185,7 @@
                                 <Border.ContextMenu>
                                     <ContextMenu>
                                         <MenuItem Header="버튼생성" Click="CreateButtonInBorder_Click"/>
+                                        <MenuItem Header="차트생성" Click="CreateChartInBorder_Click"/>
                                     </ContextMenu>
                                 </Border.ContextMenu>
                                 <Canvas x:Name="ButtonCanvas1"/>
