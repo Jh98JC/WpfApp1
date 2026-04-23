@@ -21,6 +21,56 @@ namespace WpfApp2
         {
             InitializeComponent();
             this.Loaded += Window2_Loaded;
+            this.Activated += Window2_Activated;
+            this.Closed += Window2_Closed;
+        }
+
+        private void Window2_Activated(object sender, EventArgs e)
+        {
+            // Window2가 활성화되면 Window3 숨기기
+            HideWindow3();
+        }
+
+        private void Window2_Closed(object? sender, EventArgs e)
+        {
+            // Window2가 닫히면 Window3만 표시 (MainWindow는 숨김 유지)
+            ShowWindow3();
+        }
+
+        private void HideWindow3()
+        {
+            foreach (Window win in System.Windows.Application.Current.Windows)
+            {
+                if (win is Window3 w3 && w3.IsVisible)
+                {
+                    w3.Hide();
+                }
+            }
+        }
+
+        private void ShowMainWindow()
+        {
+            foreach (Window win in System.Windows.Application.Current.Windows)
+            {
+                if (win is MainWindow mw && !mw.IsVisible)
+                {
+                    mw.Show();
+                    return;
+                }
+            }
+        }
+
+        private void ShowWindow3()
+        {
+            foreach (Window win in System.Windows.Application.Current.Windows)
+            {
+                if (win is Window3 w3)
+                {
+                    w3.Show();
+                    w3.Topmost = true;
+                    return;
+                }
+            }
         }
 
         private async Task EnsurePhoneWebViewAsync()

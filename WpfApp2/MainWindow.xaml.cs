@@ -20,9 +20,14 @@ namespace WpfApp2
 {
     public partial class MainWindow : Window
     {
-        private const string SettingsFile = "mainwindow_settings.json";
-        private const string ButtonStateFile = "button_states.json";
-        private const string TabStateFile = "tab_states.json";
+        // 설정 파일을 사용자 AppData 폴더에 저장
+        private static readonly string AppDataFolder = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 
+            "WpfApp2");
+
+        private static readonly string SettingsFile = System.IO.Path.Combine(AppDataFolder, "mainwindow_settings.json");
+        private static readonly string ButtonStateFile = System.IO.Path.Combine(AppDataFolder, "button_states.json");
+        private static readonly string TabStateFile = System.IO.Path.Combine(AppDataFolder, "tab_states.json");
 
         private DispatcherTimer leaveTimer;
 
@@ -75,6 +80,12 @@ namespace WpfApp2
 
         public MainWindow()
         {
+            // AppData 폴더 생성 (없으면)
+            if (!Directory.Exists(AppDataFolder))
+            {
+                Directory.CreateDirectory(AppDataFolder);
+            }
+
             InitializeComponent();
             WindowStartupLocation = WindowStartupLocation.Manual;
             // 위치 복원은 SourceInitialized에서 수행
@@ -210,6 +221,7 @@ namespace WpfApp2
                         return;
                 }
             }
+
             // 타이머 시작 (이미 동작 중이면 재시작)
             leaveTimer.Stop();
             leaveTimer.Start();
@@ -234,15 +246,62 @@ namespace WpfApp2
             var mousePos = System.Windows.Forms.Control.MousePosition;
             var mainRect = GetWindowScreenRect(this);
             if (!mainRect.IsEmpty && mainRect.Contains(mousePos)) return;
-            foreach (Window win in System.Windows.Application.Current.Windows)
+
+            // 열려있는 모든 자식 Window와 컨텍스트 메뉴를 닫기
+            foreach (Window win in System.Windows.Application.Current.Windows.Cast<Window>().ToList())
             {
+                if (win == this) continue; // MainWindow 자체는 제외
+                if (win is Window3) continue; // Window3는 제외 (런처 아이콘)
+
                 if (win is Window1 w1 && w1.IsVisible)
                 {
                     var r = GetWindowScreenRect(w1);
                     if (!r.IsEmpty && r.Contains(mousePos)) return;
                 }
+
+                // 버튼 설정 다이얼로그나 기타 자식 창 닫기
+                if (win.Owner == this && win.IsVisible)
+                {
+                    try
+                    {
+                        win.Close();
+                    }
+                    catch { }
+                }
             }
+
+            // 열려있는 모든 컨텍스트 메뉴 닫기
+            CloseAllContextMenus();
+
             ShowWindow3AtLeftBottom();
+        }
+
+        private void CloseAllContextMenus()
+        {
+            // ButtonCanvas와 Border의 컨텍스트 메뉴 닫기
+            try
+            {
+                for (int i = 0; i < tabControl.Items.Count; i++)
+                {
+                    var canvas = GetCanvasByIndex(i);
+                    if (canvas?.Parent is Border border && border.ContextMenu?.IsOpen == true)
+                    {
+                        border.ContextMenu.IsOpen = false;
+                    }
+
+                    if (canvas != null)
+                    {
+                        foreach (UIElement child in canvas.Children)
+                        {
+                            if (child is System.Windows.Controls.Button btn && btn.ContextMenu?.IsOpen == true)
+                            {
+                                btn.ContextMenu.IsOpen = false;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -319,20 +378,8 @@ namespace WpfApp2
                 }
             }
 
-            // Window3 띄우기 (이미 열려있지 않으면)
-            bool window3ExistsVisible = false;
-            foreach (Window win in System.Windows.Application.Current.Windows)
-            {
-                if (win is Window3 w3 && w3.IsVisible)
-                {
-                    window3ExistsVisible = true;
-                    break;
-                }
-            }
-            if (!window3ExistsVisible)
-            {
-                ShowWindow3AtLeftBottom();
-            }
+            // MainWindow 숨기기
+            this.Hide();
         }
 
         private void PositionWindow2(Window2 w2)
@@ -379,7 +426,8 @@ namespace WpfApp2
                 existing.Owner = this;
                 existing.WindowStartupLocation = WindowStartupLocation.Manual;
                 // 저장된 위치가 없으면 기본 위치 사용
-                if (!File.Exists("window3_position.json"))
+                string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
+                if (!File.Exists(window3PositionFile))
                 {
                     existing.Left = this.Left;
                     existing.Top = this.Top + this.Height - existing.Height;
@@ -401,7 +449,8 @@ namespace WpfApp2
             win3.Loaded += (s, e) =>
             {
                 // 저장된 위치가 없을 때만 기본 위치 설정
-                if (!File.Exists("window3_position.json"))
+                string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
+                if (!File.Exists(window3PositionFile))
                 {
                     win3.Left = this.Left;
                     win3.Top = this.Top + this.Height - win3.Height;
@@ -1552,41 +1601,11 @@ namespace WpfApp2
                     MakeBorderless(dlg);
 
                     var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                    var sizeBtn = new System.Windows.Controls.Button { Content = "버튼크기 조절", Margin = new Thickness(0, 0, 0, 8) };
-                    var imgBtn = new System.Windows.Controls.Button { Content = "버튼이미지 설정", Margin = new Thickness(0, 0, 0, 8) };
+                    var sizeBtn = new System.Windows.Controls.Button { Content = "버튼이미지", Margin = new Thickness(0, 0, 0, 8) };
                     var pathBtn = new System.Windows.Controls.Button { Content = "경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                    var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트 수정", Margin = new Thickness(0, 0, 0, 8) };
+                    var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트", Margin = new Thickness(0, 0, 0, 8) };
                     var closeBtn = new System.Windows.Controls.Button { Content = "닫기" };
                     sizeBtn.Click += (sss, eee) => { dlg.Close(); ShowSizeAdjustDialog(btn, canvas, meta); };
-                    imgBtn.Click += (sss, eee) =>
-                    {
-                        dlg.Close();
-                        var dialog = new Microsoft.Win32.OpenFileDialog
-                        {
-                            Title = "이미지 선택",
-                            Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif"
-                        };
-                        if (dialog.ShowDialog() == true)
-                        {
-                            try
-                            {
-                                var src = TryLoadImageSource(dialog.FileName);
-                                if (src == null) return;
-                                var imgCtrl = GetButtonImageControl(btn) ?? new System.Windows.Controls.Image();
-                                imgCtrl.Source = src;
-                                imgCtrl.Stretch = System.Windows.Media.Stretch.Uniform;
-                                imgCtrl.Width = btn.Width * 0.8;
-                                imgCtrl.Height = btn.Height * 0.8;
-                                btn.Content = imgCtrl;
-                                SaveAllButtonStates();
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine("Set image error: " + ex);
-                                System.Windows.MessageBox.Show("이미지를 설정할 수 없습니다.\n" + ex.Message);
-                            }
-                        }
-                    };
                     pathBtn.Click += (sss, eee) =>
                     {
                         dlg.Close();
@@ -1658,7 +1677,7 @@ namespace WpfApp2
                     };
                     textBtn.Click += (sss, eee) => { dlg.Close(); ShowTextInputDialog(btn, canvas, meta); };
                     closeBtn.Click += (sss, eee) => dlg.Close();
-                    stack.Children.Add(sizeBtn); stack.Children.Add(imgBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
+                    stack.Children.Add(sizeBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
                     dlg.Content = stack; ApplyDarkTheme(dlg); dlg.ShowDialog();
                 };
 
@@ -1873,7 +1892,7 @@ namespace WpfApp2
             {
                 Width = btnWidth,
                 Height = btnHeight,
-                Content = "Button",
+                Content = "",
                 ContextMenu = new System.Windows.Controls.ContextMenu()
             };
             btn.Style = FindResource("DynamicButtonStyle") as Style;
@@ -1933,41 +1952,11 @@ namespace WpfApp2
                 MakeBorderless(dlg);
 
                 var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                var sizeBtn = new System.Windows.Controls.Button { Content = "버튼크기 조절", Margin = new Thickness(0, 0, 0, 8) };
-                var imgBtn = new System.Windows.Controls.Button { Content = "버튼이미지 설정", Margin = new Thickness(0, 0, 0, 8) };
+                var sizeBtn = new System.Windows.Controls.Button { Content = "버튼이미지", Margin = new Thickness(0, 0, 0, 8) };
                 var pathBtn = new System.Windows.Controls.Button { Content = "경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트 수정", Margin = new Thickness(0, 0, 0, 8) };
+                var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트", Margin = new Thickness(0, 0, 0, 8) };
                 var closeBtn = new System.Windows.Controls.Button { Content = "닫기" };
                 sizeBtn.Click += (sss, eee) => { dlg.Close(); ShowSizeAdjustDialog(btn, canvas, meta); };
-                imgBtn.Click += (sss, eee) =>
-                {
-                    dlg.Close();
-                    var dialog = new Microsoft.Win32.OpenFileDialog
-                    {
-                        Title = "이미지 선택",
-                        Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif"
-                    };
-                    if (dialog.ShowDialog() == true)
-                    {
-                        try
-                        {
-                            var src = TryLoadImageSource(dialog.FileName);
-                            if (src == null) return;
-                            var imgCtrl = GetButtonImageControl(btn) ?? new System.Windows.Controls.Image();
-                            imgCtrl.Source = src;
-                            imgCtrl.Stretch = System.Windows.Media.Stretch.Uniform;
-                            imgCtrl.Width = btn.Width * 0.8;
-                            imgCtrl.Height = btn.Height * 0.8;
-                            btn.Content = imgCtrl;
-                            SaveAllButtonStates();
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine("Set image error: " + ex);
-                            System.Windows.MessageBox.Show("이미지를 설정할 수 없습니다.\n" + ex.Message);
-                        }
-                    }
-                };
                 pathBtn.Click += (sss, eee) =>
                 {
                     dlg.Close();
@@ -2039,7 +2028,7 @@ namespace WpfApp2
                 };
                 textBtn.Click += (sss, eee) => { dlg.Close(); ShowTextInputDialog(btn, canvas, meta); };
                 closeBtn.Click += (sss, eee) => dlg.Close();
-                stack.Children.Add(sizeBtn); stack.Children.Add(imgBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
+                stack.Children.Add(sizeBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
                 dlg.Content = stack; ApplyDarkTheme(dlg); dlg.ShowDialog();
             };
 
@@ -2326,6 +2315,8 @@ namespace WpfApp2
             rootGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
             rootGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(40) });
             rootGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
+
+            // 왼쪽 패널: 버튼 크기 + 미리보기
             var leftPanel = new System.Windows.Controls.StackPanel();
             leftPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "버튼 크기", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 0, 0, 8) });
             var wBox2 = new System.Windows.Controls.TextBox { Text = targetBtn.Width.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
@@ -2334,6 +2325,62 @@ namespace WpfApp2
             leftPanel.Children.Add(wBox2);
             leftPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:" });
             leftPanel.Children.Add(hBox2);
+
+            // 미리보기 영역
+            var previewBorder = new System.Windows.Controls.Border 
+            { 
+                Width = 120, 
+                Height = 120, 
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
+                BorderThickness = new Thickness(1),
+                Margin = new System.Windows.Thickness(0, 8, 0, 8),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50))
+            };
+            var previewImage = new System.Windows.Controls.Image 
+            { 
+                Stretch = System.Windows.Media.Stretch.Uniform,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+            var currentImg = GetButtonImageControl(targetBtn);
+            if (currentImg?.Source != null)
+            {
+                previewImage.Source = currentImg.Source;
+            }
+            previewBorder.Child = previewImage;
+            leftPanel.Children.Add(previewBorder);
+
+            // 이미지 선택 버튼
+            var selectImageBtn = new System.Windows.Controls.Button 
+            { 
+                Content = "이미지 선택", 
+                Margin = new System.Windows.Thickness(0, 0, 0, 8),
+                Padding = new Thickness(8, 4, 8, 4)
+            };
+            selectImageBtn.Click += (s, e) =>
+            {
+                var dialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "이미지 선택",
+                    Filter = "이미지 파일|*.png;*.jpg;*.jpeg;*.bmp;*.gif"
+                };
+                if (dialog.ShowDialog() == true)
+                {
+                    try
+                    {
+                        var src = TryLoadImageSource(dialog.FileName);
+                        if (src == null) return;
+                        previewImage.Source = src;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine("Set image error: " + ex);
+                        System.Windows.MessageBox.Show("이미지를 설정할 수 없습니다.\n" + ex.Message);
+                    }
+                }
+            };
+            leftPanel.Children.Add(selectImageBtn);
+
             var rightPanel = new System.Windows.Controls.StackPanel();
             rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 크기 및 위치", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 0, 0, 8) });
             var imgRef = GetButtonImageControl(targetBtn);
@@ -2349,8 +2396,10 @@ namespace WpfApp2
             var posWrap2 = new System.Windows.Controls.WrapPanel { HorizontalAlignment = System.Windows.HorizontalAlignment.Left };
             string[] posNames2 = { "중앙", "위", "아래", "왼쪽", "오른쪽" };
             var posButtons2 = new System.Collections.Generic.List<System.Windows.Controls.Button>();
+
+            // 기본값은 항상 중앙, 기존 이미지가 있을 경우에만 해당 위치로 설정
             string current2 = "중앙";
-            if (imgRef != null)
+            if (imgRef != null && imgRef.Source != null)
             {
                 if (imgRef.VerticalAlignment == System.Windows.VerticalAlignment.Top) current2 = "위";
                 else if (imgRef.VerticalAlignment == System.Windows.VerticalAlignment.Bottom) current2 = "아래";
@@ -2404,6 +2453,14 @@ namespace WpfApp2
             {
                 try
                 {
+                    // 이미지를 먼저 적용
+                    if (previewImage.Source != null)
+                    {
+                        var imgCtrl = GetButtonImageControl(targetBtn) ?? new System.Windows.Controls.Image();
+                        imgCtrl.Source = previewImage.Source;
+                        imgCtrl.Stretch = System.Windows.Media.Stretch.Uniform;
+                    }
+
                     double bw, bh, iw, ih;
                     double? nbw = double.TryParse(wBox2.Text, out bw) ? bw : (double?)null;
                     double? nbh = double.TryParse(hBox2.Text, out bh) ? bh : (double?)null;

@@ -141,7 +141,7 @@
                                                     Background="{TemplateBinding Background}"
                                                     BorderBrush="{TemplateBinding BorderBrush}"
                                                     BorderThickness="1"
-                                                    CornerRadius="10"
+                                                    CornerRadius="5"
                                                     Padding="8,4"
                                                     Margin="2,2,2,0" Width="120">
                                                 <ContentPresenter x:Name="ContentSite"

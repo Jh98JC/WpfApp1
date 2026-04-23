@@ -21,10 +21,21 @@ namespace WpfApp2
     /// </summary>
     public partial class Window3 : Window
     {
-        private const string PositionFile = "window3_position.json";
+        // 설정 파일을 사용자 AppData 폴더에 저장
+        private static readonly string AppDataFolder = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 
+            "WpfApp2");
+
+        private static readonly string PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
 
         public Window3()
         {
+            // AppData 폴더 생성 (없으면)
+            if (!Directory.Exists(AppDataFolder))
+            {
+                Directory.CreateDirectory(AppDataFolder);
+            }
+
             InitializeComponent();
             RestorePosition();
         }
