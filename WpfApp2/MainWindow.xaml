@@ -56,7 +56,7 @@
             Background="{DynamicResource WindowBackgroundBrush}"
             CornerRadius="16">
         <DockPanel>
-            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" Background="{DynamicResource WindowBackgroundBrush}" Width="1099" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" Width="1099" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" Background="{DynamicResource ContextMenuBorderBrush}">
                 <Grid Height="32" Margin="0,0,2,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition/>
