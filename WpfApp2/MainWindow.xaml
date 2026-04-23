@@ -141,7 +141,7 @@
                                                     Background="{TemplateBinding Background}"
                                                     BorderBrush="{TemplateBinding BorderBrush}"
                                                     BorderThickness="1"
-                                                    CornerRadius="5"
+                                                    CornerRadius="8"
                                                     Padding="8,4"
                                                     Margin="2,2,2,0" Width="120">
                                                 <ContentPresenter x:Name="ContentSite"
@@ -171,7 +171,7 @@
                                     <MenuItem Header="탭 삭제" Click="DeleteTabItem_Click"/>
                                 </ContextMenu>
                             </TabItem.ContextMenu>
-                            <Border CornerRadius="16" Margin="0,0,0,3" ContextMenuOpening="DynamicButtonBorder_ContextMenuOpening" Background="{DynamicResource StatusBarBackgroundBrush}">
+                            <Border CornerRadius="16" Margin="0,-8,0,11" ContextMenuOpening="DynamicButtonBorder_ContextMenuOpening" Background="{DynamicResource StatusBarBackgroundBrush}">
                                 <Border.Resources>
                                     <Style TargetType="{x:Type Button}">
                                         <Style.Triggers>
