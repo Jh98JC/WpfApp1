@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -25,6 +26,13 @@ namespace WpfApp2
         {
             InitializeComponent();
             SourceInitialized += Window1_SourceInitialized;
+
+            // Assembly에서 실제 버전 읽어오기
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            if (version != null)
+            {
+                versionText.Text = $"버전: {version.Major}.{version.Minor}.{version.Build}";
+            }
         }
 
         private void Window1_SourceInitialized(object sender, EventArgs e)

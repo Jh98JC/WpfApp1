@@ -46,4 +46,5 @@ Write-Host ""
 Write-Host "ZIP 파일 위치: $zipFile" -ForegroundColor Cyan
 
 # 폴더 열기
-explorer "publish"
+explorer.exe publish
+

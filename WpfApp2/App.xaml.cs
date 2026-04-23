@@ -17,6 +17,7 @@ namespace WpfApp2
         private SplashWindow? splashWindow;
         private static Mutex? mutex;
         private const string UpdateFlagFile = "update_completed.flag";
+        private MainWindow? mainWindow;  // 메인 윈도우 인스턴스 저장
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -36,20 +37,39 @@ namespace WpfApp2
             // 업데이트 완료 플래그 확인
             CheckUpdateCompletedFlag();
 
+            // 먼저 메인 윈도우 생성 (표시는 하지 않음)
+            mainWindow = new MainWindow();
+
+            // MainWindow를 애플리케이션의 메인 윈도우로 설정
+            this.MainWindow = mainWindow;
+
             // 스플래시 창 표시
             splashWindow = new SplashWindow();
             splashWindow.Show();
 
             // 자동 업데이트 설정
-            AutoUpdater.ShowSkipButton = false;
-            AutoUpdater.ShowRemindLaterButton = false;
-            AutoUpdater.Mandatory = true;
-            AutoUpdater.UpdateMode = Mode.Forced;
+            AutoUpdater.ShowSkipButton = false;  // Skip 버튼 숨김
+            AutoUpdater.ShowRemindLaterButton = false;  // Remind Later 버튼 숨김
+            AutoUpdater.Mandatory = true;  // 필수 업데이트
+            AutoUpdater.UpdateMode = Mode.Normal;  // 정상 모드 - 사용자가 다운로드 버튼 클릭
+            AutoUpdater.ReportErrors = true;  // 오류 보고 활성화
 
-            // 업데이트 확인 이벤트 구독
-            AutoUpdater.CheckForUpdateEvent += AutoUpdater_CheckForUpdateEvent;
+            // Synchronous = true: 업데이트 확인 완료까지 대기
+            AutoUpdater.Synchronous = true;
 
-            // 업데이트 적용 이벤트 구독 (업데이트 다운로드 및 실행 직전)
+            // RunUpdateAsAdmin을 false로 설정
+            AutoUpdater.RunUpdateAsAdmin = false;
+
+            // LetUserSelectRemindLater를 false로 설정
+            AutoUpdater.LetUserSelectRemindLater = false;
+
+            // 디버그 로깅 (개발 중)
+            System.Diagnostics.Debug.WriteLine("=== AutoUpdater 설정 시작 ===");
+
+            // 파싱 이벤트만 구독 (커스텀 XML 파싱용)
+            AutoUpdater.ParseUpdateInfoEvent += AutoUpdater_ParseUpdateInfoEvent;
+
+            // ApplicationExitEvent 추가 - 업데이트 다운로드 완료 후 앱 종료 전
             AutoUpdater.ApplicationExitEvent += AutoUpdater_ApplicationExitEvent;
 
             // 시작 시간 기록
@@ -60,114 +80,106 @@ namespace WpfApp2
             string githubRepo = "WpfApp1";
             string updateUrl = $"https://raw.githubusercontent.com/{githubUser}/{githubRepo}/main/updates/update.xml";
 
+            System.Diagnostics.Debug.WriteLine($"업데이트 URL: {updateUrl}");
+
+            // AutoUpdater 시작 - 업데이트 확인 (동기)
             AutoUpdater.Start(updateUrl);
+
+            // 스플래시 1초 후 닫고 MainWindow 표시
+            Task.Run(async () =>
+            {
+                await Task.Delay(1000);
+                Dispatcher.Invoke(() =>
+                {
+                    splashWindow?.Close();
+                    splashWindow = null;
+
+                    // AutoUpdater.Start()가 완료되었으므로 MainWindow 표시
+                    if (mainWindow != null && !mainWindow.IsVisible)
+                    {
+                        mainWindow.Show();
+                    }
+                });
+            });
         }
 
         private void CheckUpdateCompletedFlag()
         {
+            // ChangelogWindow 기능 제거 - AutoUpdater가 자체 UI로 처리
+            // 플래그 파일이 있으면 삭제만 함
             try
             {
                 string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
-
                 if (File.Exists(flagPath))
                 {
-                    // 플래그 파일 읽기
-                    string[] lines = File.ReadAllLines(flagPath);
-                    if (lines.Length >= 3)
-                    {
-                        string version = lines[0];
-                        string changelog = lines[1];
-                        string changelogUrl = lines[2];
-
-                        // 플래그 파일 삭제
-                        File.Delete(flagPath);
-
-                        // 메인 윈도우가 로드된 후 변경 로그 표시
-                        this.Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            var changelogWindow = new ChangelogWindow(version, changelog, changelogUrl);
-                            changelogWindow.Show();
-                        }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                    }
+                    File.Delete(flagPath);
                 }
             }
             catch
             {
                 // 오류 무시
+            }
+        }
+
+        private void AutoUpdater_ParseUpdateInfoEvent(ParseUpdateInfoEventArgs args)
+        {
+            System.Diagnostics.Debug.WriteLine("=== ParseUpdateInfoEvent 호출됨 ===");
+            System.Diagnostics.Debug.WriteLine($"RemoteData: {args.RemoteData}");
+
+            try
+            {
+                var xml = System.Xml.Linq.XDocument.Parse(args.RemoteData);
+                var item = xml.Element("item");
+
+                args.UpdateInfo = new UpdateInfoEventArgs
+                {
+                    CurrentVersion = item.Element("version")?.Value,
+                    DownloadURL = item.Element("url")?.Value,
+                    ChangelogURL = item.Element("changelog")?.Value,
+                    Mandatory = new Mandatory
+                    {
+                        Value = bool.Parse(item.Element("mandatory")?.Value ?? "false")
+                    }
+                };
+
+                System.Diagnostics.Debug.WriteLine($"파싱 완료 - 버전: {args.UpdateInfo.CurrentVersion}");
+                System.Diagnostics.Debug.WriteLine($"다운로드 URL: {args.UpdateInfo.DownloadURL}");
+
+                // 오류 로깅을 위한 파일 기록
+                try
+                {
+                    string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "update_debug.log");
+                    File.WriteAllText(logPath, $"ParseUpdateInfoEvent - {DateTime.Now}\n" +
+                        $"Version: {args.UpdateInfo.CurrentVersion}\n" +
+                        $"DownloadURL: {args.UpdateInfo.DownloadURL}\n" +
+                        $"ChangelogURL: {args.UpdateInfo.ChangelogURL}\n" +
+                        $"Mandatory: {args.UpdateInfo.Mandatory.Value}\n");
+                }
+                catch { }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"XML 파싱 오류: {ex.Message}");
+
+                // 오류 로깅
+                try
+                {
+                    string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "update_error.log");
+                    File.WriteAllText(logPath, $"ParseUpdateInfoEvent Error - {DateTime.Now}\n" +
+                        $"Message: {ex.Message}\n" +
+                        $"StackTrace: {ex.StackTrace}\n");
+                }
+                catch { }
             }
         }
 
         private void AutoUpdater_ApplicationExitEvent()
         {
-            // 업데이트 시작 전에 플래그 파일 생성
-            try
-            {
-                string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+            System.Diagnostics.Debug.WriteLine("=== ApplicationExitEvent 호출됨 ===");
+            System.Diagnostics.Debug.WriteLine("업데이트를 위해 애플리케이션을 종료합니다.");
 
-                // 버전 정보 저장 (업데이트 정보는 AutoUpdater에서 가져올 수 없으므로 기본 값 사용)
-                File.WriteAllLines(flagPath, new string[]
-                {
-                    "업데이트 버전",
-                    "• 새로운 기능 및 개선 사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선\n• 중복 실행 방지 기능 추가",
-                    "https://github.com/Jh98JC/WpfApp1/releases"
-                });
-            }
-            catch
-            {
-                // 오류 무시
-            }
-        }
-
-        private async void AutoUpdater_CheckForUpdateEvent(UpdateInfoEventArgs args)
-        {
-            // 최소 1초 대기 (업데이트 확인 중임을 사용자에게 표시)
-            var elapsed = DateTime.Now - updateCheckStartTime;
-            var minDisplayTime = TimeSpan.FromSeconds(1);
-
-            if (elapsed < minDisplayTime)
-            {
-                await Task.Delay(minDisplayTime - elapsed);
-            }
-
-            // UI 스레드에서 실행
-            Dispatcher.Invoke(() =>
-            {
-                if (splashWindow != null)
-                {
-                    if (args != null)
-                    {
-                        if (args.IsUpdateAvailable)
-                        {
-                            splashWindow.UpdateStatus($"업데이트 발견! v{args.CurrentVersion}");
-                        }
-                        else if (args.Error != null)
-                        {
-                            splashWindow.UpdateStatus($"오류: {args.Error.Message}");
-                        }
-                        else
-                        {
-                            splashWindow.UpdateStatus($"최신 버전입니다. (v{args.InstalledVersion})");
-                        }
-                    }
-                    else
-                    {
-                        splashWindow.UpdateStatus("업데이트 정보를 가져올 수 없습니다.");
-                    }
-                }
-            });
-
-            // 추가로 0.5초 대기 (상태 메시지 표시)
-            await Task.Delay(500);
-
-            // 스플래시 창 닫기
-            Dispatcher.Invoke(() =>
-            {
-                splashWindow?.Close();
-                splashWindow = null;
-            });
-
-            // 이벤트 핸들러 해제
-            AutoUpdater.CheckForUpdateEvent -= AutoUpdater_CheckForUpdateEvent;
+            // 업데이트를 위해 즉시 앱 종료
+            Environment.Exit(0);
         }
 
         protected override void OnExit(ExitEventArgs e)
