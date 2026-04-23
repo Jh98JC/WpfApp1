@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
   <!-- 새 버전 번호 -->
-  <version>1.0.8.0</version>
+  <version>1.0.0.0</version>
 
   <!-- GitHub Release 다운로드 URL -->
-  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.0.7/WpfApp2-v1.0.7.zip</url>
+  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.0.0/WpfApp2-v1.0.0.zip</url>
 
   <!-- 변경 사항 설명 -->
   <changelog>
@@ -16,7 +16,7 @@
   </changelog>
 
   <!-- 변경 로그 URL (GitHub Release 페이지) -->
-  <changelogUrl>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.0.7</changelogUrl>
+  <changelogUrl>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.0.0</changelogUrl>
 
   <!-- 필수 업데이트 여부 -->
   <mandatory>true</mandatory>

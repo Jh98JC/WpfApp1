@@ -19,6 +19,7 @@ namespace WpfApp2
         private const string UpdateFlagFile = "update_completed.flag";
         private MainWindow? mainWindow;  // 메인 윈도우 인스턴스 저장
         private string? pendingUpdateVersion;  // 업데이트될 버전 저장
+        private string? pendingChangelogUrl;  // 변경로그 URL 저장
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -121,6 +122,11 @@ namespace WpfApp2
                     File.Delete(flagPath);
                     System.Diagnostics.Debug.WriteLine("플래그 파일 삭제됨");
 
+                    // GitHub Release URL 구성 (예: "1.0.9.0" -> "v1.0.9")
+                    string versionTag = "v" + versionInfo.TrimEnd('0', '.');
+                    string changelogUrl = $"https://github.com/Jh98JC/WpfApp1/releases/tag/{versionTag}";
+                    System.Diagnostics.Debug.WriteLine($"변경로그 URL 구성: {changelogUrl}");
+
                     // MainWindow가 표시된 후 변경내용 창 표시
                     Task.Run(async () =>
                     {
@@ -133,8 +139,8 @@ namespace WpfApp2
 
                             if (mainWindow != null && mainWindow.IsVisible)
                             {
-                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}");
-                                var changelogWindow = new ChangelogWindow(versionInfo)
+                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}, URL: {changelogUrl}");
+                                var changelogWindow = new ChangelogWindow(versionInfo, null, changelogUrl)
                                 {
                                     Owner = mainWindow,
                                     WindowStartupLocation = WindowStartupLocation.CenterOwner
@@ -166,13 +172,16 @@ namespace WpfApp2
                 var item = xml.Element("item");
 
                 var newVersion = item.Element("version")?.Value;
+                var changelogUrl = item.Element("changelog")?.Value;
+
                 pendingUpdateVersion = newVersion;  // 새 버전 저장
+                pendingChangelogUrl = changelogUrl;  // 변경로그 URL 저장
 
                 args.UpdateInfo = new UpdateInfoEventArgs
                 {
                     CurrentVersion = newVersion,
                     DownloadURL = item.Element("url")?.Value,
-                    ChangelogURL = item.Element("changelog")?.Value,
+                    ChangelogURL = changelogUrl,
                     Mandatory = new Mandatory
                     {
                         Value = bool.Parse(item.Element("mandatory")?.Value ?? "false")
@@ -181,6 +190,7 @@ namespace WpfApp2
 
                 System.Diagnostics.Debug.WriteLine($"파싱 완료 - 버전: {args.UpdateInfo.CurrentVersion}");
                 System.Diagnostics.Debug.WriteLine($"다운로드 URL: {args.UpdateInfo.DownloadURL}");
+                System.Diagnostics.Debug.WriteLine($"변경로그 URL: {changelogUrl}");
 
                 // 오류 로깅을 위한 파일 기록
                 try
