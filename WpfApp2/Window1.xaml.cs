@@ -89,6 +89,15 @@ namespace WpfApp2
             Close();
         }
 
+        private void Window1_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                Close();
+                e.Handled = true;
+            }
+        }
+
         private void addTab_Click(object sender, RoutedEventArgs e)
         {
             var main = Owner as MainWindow;

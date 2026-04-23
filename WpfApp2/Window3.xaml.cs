@@ -22,8 +22,6 @@ namespace WpfApp2
     public partial class Window3 : Window
     {
         private const string PositionFile = "window3_position.json";
-        private bool isDragging = false;
-        private System.Windows.Point dragStartPoint;
 
         public Window3()
         {
@@ -35,41 +33,6 @@ namespace WpfApp2
         protected override void OnActivated(EventArgs e)
         {
 
-        }
-
-        private void Grid_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            isDragging = true;
-            dragStartPoint = e.GetPosition(null);
-            ((UIElement)sender).CaptureMouse();
-            e.Handled = true;
-        }
-
-        private void Grid_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-        {
-            if (isDragging && e.LeftButton == MouseButtonState.Pressed)
-            {
-                System.Windows.Point currentPosition = e.GetPosition(null);
-                double offsetX = currentPosition.X - dragStartPoint.X;
-                double offsetY = currentPosition.Y - dragStartPoint.Y;
-
-                this.Left += offsetX;
-                this.Top += offsetY;
-
-                // 현재 위치를 새로운 시작점으로 업데이트
-                dragStartPoint = currentPosition;
-            }
-        }
-
-        private void Grid_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            if (isDragging)
-            {
-                isDragging = false;
-                ((UIElement)sender).ReleaseMouseCapture();
-                SavePosition(); // 드래그 종료 시 위치 자동 저장
-                e.Handled = true;
-            }
         }
 
         private void Grid_MouseRightButtonDown(object sender, MouseButtonEventArgs e)

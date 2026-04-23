@@ -9,7 +9,8 @@
         Background="Transparent"
         Foreground="{DynamicResource ForegroundBrush}"
         ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"
-        WindowStartupLocation="Manual">
+        WindowStartupLocation="Manual"
+        PreviewKeyDown="Window1_PreviewKeyDown">
     <!-- 최상위 Border에 CornerRadius 적용 -->
     <Border BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
             Background="{DynamicResource WindowBackgroundBrush}"

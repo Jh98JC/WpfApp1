@@ -10,7 +10,7 @@
     <Window.Background>
         <ImageBrush ImageSource="/1.png"/>
     </Window.Background>
-    <Grid MouseLeftButtonDown="Grid_MouseLeftButtonDown" MouseMove="Grid_MouseMove" MouseLeftButtonUp="Grid_MouseLeftButtonUp" MouseRightButtonDown="Grid_MouseRightButtonDown">
+    <Grid MouseRightButtonDown="Grid_MouseRightButtonDown">
         <Grid.Background>
             <ImageBrush ImageSource="/1.png" Stretch="Fill"/>
         </Grid.Background>
