@@ -31,7 +31,7 @@ namespace WpfApp2
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             if (version != null)
             {
-                versionText.Text = $"버전: {version.Major}.{version.Minor}.{version.Build}";
+                versionText.Text = $"v{version.Major}.{version.Minor}.{version.Build}";
             }
         }
 

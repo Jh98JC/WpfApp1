@@ -164,7 +164,7 @@
                                 </Setter>
                             </Style>
                         </TabControl.Resources>
-                        <TabItem x:Name="tabItem" Header="Tabitem1" Height="40" Background="{DynamicResource WindowBackgroundBrush}" Foreground="White" BorderBrush="{DynamicResource WindowBackgroundBrush}" IsSelected="True">
+                        <TabItem x:Name="tabItem" Header="Main" Height="40" Background="{DynamicResource WindowBackgroundBrush}" Foreground="White" BorderBrush="{DynamicResource WindowBackgroundBrush}" IsSelected="True">
                             <TabItem.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="이름 수정" Click="RenameTabItem_Click"/>
