@@ -3,7 +3,7 @@
     [string]$Version,
     
     [Parameter(Mandatory=$false)]
-    [string]$ReleaseNotes = "- 새로운 기능 및 개선 사항`n- 버그 수정 및 성능 개선"
+    [string]$ReleaseNotes = "- "
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +34,7 @@ Write-Host "[2/6] Updating update.xml..." -ForegroundColor Yellow
 $xmlContent = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
-  <version>$Version.0</version>
+  <version>$Version</version>
   <url>https://github.com/Jh98JC/WpfApp1/releases/download/v$Version/WpfApp2-v$Version.zip</url>
   <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v$Version</changelog>
   <mandatory>true</mandatory>
