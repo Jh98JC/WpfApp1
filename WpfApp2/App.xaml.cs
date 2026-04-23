@@ -18,6 +18,7 @@ namespace WpfApp2
         private static Mutex? mutex;
         private const string UpdateFlagFile = "update_completed.flag";
         private MainWindow? mainWindow;  // 메인 윈도우 인스턴스 저장
+        private string? pendingUpdateVersion;  // 업데이트될 버전 저장
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -108,11 +109,17 @@ namespace WpfApp2
             try
             {
                 string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+                System.Diagnostics.Debug.WriteLine($"=== CheckUpdateCompletedFlag ===");
+                System.Diagnostics.Debug.WriteLine($"플래그 파일 경로: {flagPath}");
+                System.Diagnostics.Debug.WriteLine($"플래그 파일 존재: {File.Exists(flagPath)}");
+
                 if (File.Exists(flagPath))
                 {
                     // 플래그 파일에서 버전 정보 읽기
                     string versionInfo = File.ReadAllText(flagPath);
+                    System.Diagnostics.Debug.WriteLine($"플래그 파일 내용: {versionInfo}");
                     File.Delete(flagPath);
+                    System.Diagnostics.Debug.WriteLine("플래그 파일 삭제됨");
 
                     // MainWindow가 표시된 후 변경내용 창 표시
                     Task.Run(async () =>
@@ -120,8 +127,13 @@ namespace WpfApp2
                         await Task.Delay(1500); // MainWindow 표시 후 1.5초 대기
                         Dispatcher.Invoke(() =>
                         {
+                            System.Diagnostics.Debug.WriteLine($"ChangelogWindow 표시 시도");
+                            System.Diagnostics.Debug.WriteLine($"mainWindow null? {mainWindow == null}");
+                            System.Diagnostics.Debug.WriteLine($"mainWindow.IsVisible? {mainWindow?.IsVisible}");
+
                             if (mainWindow != null && mainWindow.IsVisible)
                             {
+                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}");
                                 var changelogWindow = new ChangelogWindow(versionInfo)
                                 {
                                     Owner = mainWindow,
@@ -129,13 +141,17 @@ namespace WpfApp2
                                 };
                                 changelogWindow.ShowDialog();
                             }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("MainWindow가 보이지 않아 ChangelogWindow 표시 안 함");
+                            }
                         });
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // 오류 무시
+                System.Diagnostics.Debug.WriteLine($"CheckUpdateCompletedFlag 오류: {ex.Message}");
             }
         }
 
@@ -149,9 +165,12 @@ namespace WpfApp2
                 var xml = System.Xml.Linq.XDocument.Parse(args.RemoteData);
                 var item = xml.Element("item");
 
+                var newVersion = item.Element("version")?.Value;
+                pendingUpdateVersion = newVersion;  // 새 버전 저장
+
                 args.UpdateInfo = new UpdateInfoEventArgs
                 {
-                    CurrentVersion = item.Element("version")?.Value,
+                    CurrentVersion = newVersion,
                     DownloadURL = item.Element("url")?.Value,
                     ChangelogURL = item.Element("changelog")?.Value,
                     Mandatory = new Mandatory
@@ -196,15 +215,18 @@ namespace WpfApp2
             System.Diagnostics.Debug.WriteLine("=== ApplicationExitEvent 호출됨 ===");
             System.Diagnostics.Debug.WriteLine("업데이트를 위해 애플리케이션을 종료합니다.");
 
-            // 업데이트 완료 플래그 생성 (버전 정보 저장)
+            // 업데이트 완료 플래그 생성 (새 버전 정보 저장)
             try
             {
                 string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
-                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                var version = assembly.GetName().Version;
-                File.WriteAllText(flagPath, version?.ToString() ?? "Unknown");
+                // 업데이트될 버전 정보를 저장 (ParseUpdateInfoEvent에서 저장한 값)
+                File.WriteAllText(flagPath, pendingUpdateVersion ?? "Unknown");
+                System.Diagnostics.Debug.WriteLine($"플래그 파일 생성: {flagPath}, 버전: {pendingUpdateVersion}");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"플래그 파일 생성 실패: {ex.Message}");
+            }
 
             // 업데이트를 위해 즉시 앱 종료
             Environment.Exit(0);
