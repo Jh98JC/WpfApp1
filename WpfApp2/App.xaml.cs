@@ -52,7 +52,7 @@ namespace WpfApp2
             AutoUpdater.ShowRemindLaterButton = false;  // Remind Later 버튼 숨김
             AutoUpdater.Mandatory = true;  // 필수 업데이트
             AutoUpdater.UpdateMode = Mode.Normal;  // 정상 모드 - 사용자가 다운로드 버튼 클릭
-            AutoUpdater.ReportErrors = true;  // 오류 보고 활성화
+            AutoUpdater.ReportErrors = false;  // 업데이트 없을 때 메시지 숨김
 
             // Synchronous = true: 업데이트 확인 완료까지 대기
             AutoUpdater.Synchronous = true;

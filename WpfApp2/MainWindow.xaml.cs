@@ -77,7 +77,7 @@ namespace WpfApp2
         {
             InitializeComponent();
             WindowStartupLocation = WindowStartupLocation.Manual;
-            RestoreWindowPosition();
+            // 위치 복원은 SourceInitialized에서 수행
             RestoreAllTabs(); // 탭 복원을 먼저 수행
             RestoreAllButtonStates(); // 그 다음 버튼 복원
             Loaded += MainWindow_Loaded;
@@ -98,6 +98,10 @@ namespace WpfApp2
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
+
+            // 윈도우가 생성된 후 위치 복원
+            RestoreWindowPosition();
+
             var source = (HwndSource)PresentationSource.FromVisual(this)!;
             source.AddHook(WndProc);
             RegisterHotKey(source.Handle, HOTKEY_ID_ALT_F1, MOD_ALT, VK_F1); // Alt+F1 등록
@@ -476,18 +480,9 @@ namespace WpfApp2
                 Top = targetTop;
             }
 
-            Left = SystemParameters.WorkArea.Left;
-            Top = SystemParameters.WorkArea.Bottom - Height;
-
-            var anim = new DoubleAnimation
-            {
-                From = Top,
-                To = targetTop,
-                Duration = TimeSpan.FromMilliseconds(400),
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-            };
-            BeginAnimation(Window.TopProperty, anim);
+            // 저장된 위치 그대로 사용 (애니메이션 제거)
             Left = targetLeft;
+            Top = targetTop;
         }
 
         private void RestoreWindowPosition()
