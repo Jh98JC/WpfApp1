@@ -105,14 +105,32 @@ namespace WpfApp2
 
         private void CheckUpdateCompletedFlag()
         {
-            // ChangelogWindow 기능 제거 - AutoUpdater가 자체 UI로 처리
-            // 플래그 파일이 있으면 삭제만 함
             try
             {
                 string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
                 if (File.Exists(flagPath))
                 {
+                    // 플래그 파일에서 버전 정보 읽기
+                    string versionInfo = File.ReadAllText(flagPath);
                     File.Delete(flagPath);
+
+                    // MainWindow가 표시된 후 변경내용 창 표시
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(1500); // MainWindow 표시 후 1.5초 대기
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (mainWindow != null && mainWindow.IsVisible)
+                            {
+                                var changelogWindow = new ChangelogWindow(versionInfo)
+                                {
+                                    Owner = mainWindow,
+                                    WindowStartupLocation = WindowStartupLocation.CenterOwner
+                                };
+                                changelogWindow.ShowDialog();
+                            }
+                        });
+                    });
                 }
             }
             catch
@@ -177,6 +195,16 @@ namespace WpfApp2
         {
             System.Diagnostics.Debug.WriteLine("=== ApplicationExitEvent 호출됨 ===");
             System.Diagnostics.Debug.WriteLine("업데이트를 위해 애플리케이션을 종료합니다.");
+
+            // 업데이트 완료 플래그 생성 (버전 정보 저장)
+            try
+            {
+                string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                var version = assembly.GetName().Version;
+                File.WriteAllText(flagPath, version?.ToString() ?? "Unknown");
+            }
+            catch { }
 
             // 업데이트를 위해 즉시 앱 종료
             Environment.Exit(0);
