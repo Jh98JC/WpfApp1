@@ -23,17 +23,25 @@ namespace WpfApp2
 
         private void UpdateWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            CurrentVersionText.Text = CurrentVersion;
-            LatestVersionText.Text = LatestVersion;
-            VersionPanel.Visibility = Visibility.Visible;
+            // 버전 정보 업데이트
+            CurrentVersionText.Text = $"v{CurrentVersion}";
+            LatestVersionText.Text = $"v{LatestVersion}";
+            VersionInfoText.Text = $"v{LatestVersion} 사용 가능";
 
-            StatusText.Text = "새 업데이트가 있습니다!";
+            VersionPanel.Visibility = Visibility.Visible;
+            StatusText.Text = "새 버전 업데이트";
             UpdateButton.Visibility = Visibility.Visible;
 
+            // 변경 내용이 있으면 표시
             if (!string.IsNullOrEmpty(ChangelogContent))
             {
                 ChangelogBorder.Visibility = Visibility.Visible;
                 ChangelogText.Text = ChangelogContent;
+            }
+            else
+            {
+                ChangelogBorder.Visibility = Visibility.Visible;
+                ChangelogText.Text = "• 새로운 기능 및 개선사항이 포함되어 있습니다.\n• 버그 수정 및 성능 개선";
             }
         }
 
