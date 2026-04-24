@@ -1510,9 +1510,25 @@ namespace WpfApp2
                         }
                         catch { }
                     }
-                    if (state.BackgroundTransparent)
+                    // BgColor: null = default(theme), "transparent" = none, hex = custom
+                    // BackgroundTransparent kept for legacy JSON
+                    if (state.BgColor == "transparent" || (string.IsNullOrEmpty(state.BgColor) && state.BackgroundTransparent))
                     {
                         btn.Background = System.Windows.Media.Brushes.Transparent;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(state.BgColor))
+                    {
+                        try
+                        {
+                            var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(state.BgColor)!;
+                            btn.Background = new System.Windows.Media.SolidColorBrush(c);
+                        }
+                        catch { }
+                    }
+                    // CustomFontFamily: null = default(theme)
+                    if (!string.IsNullOrWhiteSpace(state.CustomFontFamily))
+                    {
+                        try { btn.FontFamily = new System.Windows.Media.FontFamily(state.CustomFontFamily); } catch { }
                     }
                 }
                 catch { }
@@ -1747,8 +1763,14 @@ namespace WpfApp2
                                 FontSize = btn.FontSize,
                                 FontWeightName = btn.FontWeight.ToString(),
                                 Italic = btn.FontStyle == System.Windows.FontStyles.Italic,
-                                FontColor = (btn.Foreground as System.Windows.Media.SolidColorBrush)?.Color.ToString(),
-                                BackgroundTransparent = (btn.Background as System.Windows.Media.SolidColorBrush)?.Color.A == 0
+                                FontColor = btn.ReadLocalValue(System.Windows.Controls.Control.ForegroundProperty) != DependencyProperty.UnsetValue
+                                    ? (btn.Foreground as System.Windows.Media.SolidColorBrush)?.Color.ToString() : null,
+                                BgColor = btn.ReadLocalValue(System.Windows.Controls.Control.BackgroundProperty) != DependencyProperty.UnsetValue
+                                    ? ((btn.Background as System.Windows.Media.SolidColorBrush)?.Color.A == 0 ? "transparent"
+                                        : (btn.Background as System.Windows.Media.SolidColorBrush)?.Color.ToString()) : null,
+                                CustomFontFamily = btn.ReadLocalValue(System.Windows.Controls.Control.FontFamilyProperty) != DependencyProperty.UnsetValue
+                                    ? btn.FontFamily?.Source : null,
+                                BackgroundTransparent = false
                             };
                             list.Add(state);
                         }
@@ -3584,12 +3606,148 @@ namespace WpfApp2
             rightPanel.Children.Add(posWrap2);
             UpdateButtonStyles2();
 
-            // Background remove toggle
-            bool initBgTransparent = (targetBtn.Background as System.Windows.Media.SolidColorBrush)?.Color.A == 0;
-            var bgToggle = new System.Windows.Controls.CheckBox { Content = "바탕색 제거", IsChecked = initBgTransparent, Margin = new System.Windows.Thickness(0, 8, 0, 0) };
-            bgToggle.Checked += (s, e2) => { targetBtn.Background = System.Windows.Media.Brushes.Transparent; SaveAllButtonStates(); };
-            bgToggle.Unchecked += (s, e2) => { targetBtn.ClearValue(System.Windows.Controls.Control.BackgroundProperty); SaveAllButtonStates(); };
-            rightPanel.Children.Add(bgToggle);
+            // ── 배경색 ──────────────────────────────────────────────
+            string? selectedBgColor = targetBtn.ReadLocalValue(System.Windows.Controls.Control.BackgroundProperty) != DependencyProperty.UnsetValue
+                ? ((targetBtn.Background as System.Windows.Media.SolidColorBrush)?.Color.A == 0 ? "transparent"
+                    : (targetBtn.Background as System.Windows.Media.SolidColorBrush)?.Color.ToString())
+                : null;
+
+            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "배경색", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 8, 0, 4) });
+
+            var bgWrap = new System.Windows.Controls.WrapPanel { Margin = new System.Windows.Thickness(0, 0, 0, 4) };
+            var bgSwatches = new System.Collections.Generic.List<System.Windows.Controls.Border>();
+
+            System.Windows.Controls.Border MakeSwatch(string? colorKey, string label, System.Windows.Media.Brush fill)
+            {
+                var outer = new System.Windows.Controls.Border
+                {
+                    Width = 26, Height = 26, CornerRadius = new System.Windows.CornerRadius(4),
+                    BorderThickness = new System.Windows.Thickness(2),
+                    BorderBrush = System.Windows.Media.Brushes.Transparent,
+                    Margin = new System.Windows.Thickness(0, 0, 4, 4),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    ToolTip = label
+                };
+                var inner = new System.Windows.Controls.Border
+                {
+                    Background = fill, CornerRadius = new System.Windows.CornerRadius(2)
+                };
+                if (colorKey == "transparent")
+                {
+                    var grid = new System.Windows.Controls.Grid();
+                    grid.Children.Add(new System.Windows.Controls.Border { Background = System.Windows.Media.Brushes.White, CornerRadius = new System.Windows.CornerRadius(2) });
+                    var line = new System.Windows.Shapes.Line { X1 = 0, Y1 = 26, X2 = 26, Y2 = 0, Stroke = System.Windows.Media.Brushes.Red, StrokeThickness = 1.5 };
+                    grid.Children.Add(line);
+                    inner.Child = grid;
+                }
+                outer.Child = inner;
+                return outer;
+            }
+
+            void RefreshBgSwatchBorders()
+            {
+                foreach (var sw in bgSwatches)
+                {
+                    var key = sw.Tag as string;
+                    bool sel = selectedBgColor == key;
+                    sw.BorderBrush = sel ? System.Windows.Media.Brushes.White : System.Windows.Media.Brushes.Transparent;
+                }
+            }
+
+            void AddBgSwatch(string? colorKey, string label, System.Windows.Media.Brush fill)
+            {
+                var sw = MakeSwatch(colorKey, label, fill);
+                sw.Tag = colorKey;
+                sw.MouseLeftButtonDown += (s2, _) => { selectedBgColor = colorKey; RefreshBgSwatchBorders(); };
+                bgSwatches.Add(sw);
+                bgWrap.Children.Add(sw);
+            }
+
+            AddBgSwatch(null, "기본값(테마)", new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(60, 60, 80)));
+            AddBgSwatch("transparent", "없음(투명)", System.Windows.Media.Brushes.Transparent);
+
+            var bgColors = new[] {
+                ("#1E1E1E","검정"), ("#3A3A3A","진회색"), ("#707070","회색"), ("#C8C8C8","밝은 회색"),
+                ("#FFFFFF","흰색"), ("#C0392B","빨강"), ("#E67E22","주황"), ("#F1C40F","노랑"),
+                ("#27AE60","초록"), ("#2980B9","파랑"), ("#8E44AD","보라"), ("#E91E63","핑크")
+            };
+            foreach (var (hex, name) in bgColors)
+            {
+                var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+                AddBgSwatch(hex, name, new System.Windows.Media.SolidColorBrush(c));
+            }
+            rightPanel.Children.Add(bgWrap);
+            RefreshBgSwatchBorders();
+
+            // ── 글씨색 ──────────────────────────────────────────────
+            string? selectedFgColor = targetBtn.ReadLocalValue(System.Windows.Controls.Control.ForegroundProperty) != DependencyProperty.UnsetValue
+                ? (targetBtn.Foreground as System.Windows.Media.SolidColorBrush)?.Color.ToString()
+                : null;
+
+            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨색", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 4, 0, 4) });
+
+            var fgWrap = new System.Windows.Controls.WrapPanel { Margin = new System.Windows.Thickness(0, 0, 0, 4) };
+            var fgSwatches = new System.Collections.Generic.List<System.Windows.Controls.Border>();
+
+            void RefreshFgSwatchBorders()
+            {
+                foreach (var sw in fgSwatches)
+                {
+                    var key = sw.Tag as string;
+                    bool sel = selectedFgColor == key;
+                    sw.BorderBrush = sel ? System.Windows.Media.Brushes.White : System.Windows.Media.Brushes.Transparent;
+                }
+            }
+
+            void AddFgSwatch(string? colorKey, string label, System.Windows.Media.Brush fill)
+            {
+                var sw = MakeSwatch(colorKey, label, fill);
+                sw.Tag = colorKey;
+                sw.MouseLeftButtonDown += (s2, _) => { selectedFgColor = colorKey; RefreshFgSwatchBorders(); };
+                fgSwatches.Add(sw);
+                fgWrap.Children.Add(sw);
+            }
+
+            AddFgSwatch(null, "기본값(테마)", new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(60, 60, 80)));
+            var fgColors = new[] {
+                ("#FFFFFF","흰색"), ("#C8C8C8","밝은 회색"), ("#909090","회색"), ("#1E1E1E","검정"),
+                ("#C0392B","빨강"), ("#E67E22","주황"), ("#F1C40F","노랑"), ("#27AE60","초록"),
+                ("#2980B9","파랑"), ("#8E44AD","보라"), ("#E91E63","핑크")
+            };
+            foreach (var (hex, name) in fgColors)
+            {
+                var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+                AddFgSwatch(hex, name, new System.Windows.Media.SolidColorBrush(c));
+            }
+            rightPanel.Children.Add(fgWrap);
+            RefreshFgSwatchBorders();
+
+            // ── 글꼴 ────────────────────────────────────────────────
+            string? selectedFontFamily = targetBtn.ReadLocalValue(System.Windows.Controls.Control.FontFamilyProperty) != DependencyProperty.UnsetValue
+                ? targetBtn.FontFamily?.Source : null;
+
+            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "글꼴", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 4, 0, 4) });
+            var fontRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            var fontCombo = new System.Windows.Controls.ComboBox
+            {
+                IsEditable = true,
+                Width = 160,
+                Style = null,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50)),
+                Foreground = System.Windows.Media.Brushes.White,
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(90, 90, 90))
+            };
+            string[] preferredFonts = { "Malgun Gothic", "맑은 고딕", "Gulim", "굴림", "Dotum", "돋움", "Batang", "바탕", "Segoe UI", "Arial", "Tahoma", "Consolas" };
+            foreach (var f in preferredFonts) fontCombo.Items.Add(f);
+            fontCombo.Text = selectedFontFamily ?? "";
+            fontCombo.SelectionChanged += (s2, _) => { selectedFontFamily = string.IsNullOrWhiteSpace(fontCombo.Text) ? null : fontCombo.Text; };
+            fontCombo.LostFocus += (s2, _) => { selectedFontFamily = string.IsNullOrWhiteSpace(fontCombo.Text) ? null : fontCombo.Text; };
+
+            var fontDefaultBtn = new System.Windows.Controls.Button { Content = "기본값", Margin = new System.Windows.Thickness(6, 0, 0, 0), Padding = new System.Windows.Thickness(6, 2, 6, 2) };
+            fontDefaultBtn.Click += (s2, _) => { selectedFontFamily = null; fontCombo.Text = ""; };
+            fontRow.Children.Add(fontCombo);
+            fontRow.Children.Add(fontDefaultBtn);
+            rightPanel.Children.Add(fontRow);
 
             System.Windows.Controls.Grid.SetColumn(leftPanel, 0); System.Windows.Controls.Grid.SetColumn(rightPanel, 2);
             rootGrid.Children.Add(leftPanel); rootGrid.Children.Add(rightPanel);
@@ -3623,6 +3781,33 @@ namespace WpfApp2
                     iw = double.TryParse(iwBox2.Text, out var iwt) ? iwt : (GetButtonImageControl(targetBtn)?.Width ?? targetBtn.Width * 0.8);
                     ih = double.TryParse(ihBox2.Text, out var iht) ? iht : (GetButtonImageControl(targetBtn)?.Height ?? targetBtn.Height * 0.8);
                     ApplyImageSizeAndPosition(targetBtn, canvas, meta, nbw, nbh, iw, ih, current2);
+
+                    // 배경색 적용
+                    if (selectedBgColor == null)
+                        targetBtn.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+                    else if (selectedBgColor == "transparent")
+                        targetBtn.Background = System.Windows.Media.Brushes.Transparent;
+                    else
+                    {
+                        var bc = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(selectedBgColor);
+                        targetBtn.Background = new System.Windows.Media.SolidColorBrush(bc);
+                    }
+
+                    // 글씨색 적용
+                    if (selectedFgColor == null)
+                        targetBtn.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
+                    else
+                    {
+                        var fc = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(selectedFgColor);
+                        targetBtn.Foreground = new System.Windows.Media.SolidColorBrush(fc);
+                    }
+
+                    // 글꼴 적용
+                    if (selectedFontFamily == null)
+                        targetBtn.ClearValue(System.Windows.Controls.Control.FontFamilyProperty);
+                    else
+                        targetBtn.FontFamily = new System.Windows.Media.FontFamily(selectedFontFamily);
+
                     SaveAllButtonStates();
                     sizeDlg.Close();
                 }
@@ -3740,8 +3925,10 @@ namespace WpfApp2
         public double FontSize { get; set; }
         public string? FontWeightName { get; set; } // ensure setter
         public bool Italic { get; set; }
-        public string? FontColor { get; set; }
-        public bool BackgroundTransparent { get; set; }
+        public string? FontColor { get; set; }        // null = default(theme), hex = custom
+        public bool BackgroundTransparent { get; set; } // legacy compat
+        public string? BgColor { get; set; }           // null = default(theme), "transparent" = none, hex = custom
+        public string? CustomFontFamily { get; set; }  // null = default(theme)
     }
 
     // MainWindow에 TabItem 추가 메서드 (partial class 확장용)
