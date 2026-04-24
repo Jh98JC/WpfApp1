@@ -89,18 +89,18 @@ namespace WpfApp2
 
         public MainWindow()
         {
-            // AppData 폴더 생성 (없으면)
             if (!Directory.Exists(AppDataFolder))
-            {
                 Directory.CreateDirectory(AppDataFolder);
-            }
 
+            ThemeManager.LoadSaved();
             InitializeComponent();
             WindowStartupLocation = WindowStartupLocation.Manual;
             // 위치 복원은 SourceInitialized에서 수행
             RestoreAllTabs(); // 탭 복원을 먼저 수행
             RestoreAllButtonStates(); // 그 다음 버튼 복원
             RestoreAllChartStates(); // 차트 복원
+            ThemeManager.ThemeChanged += (_, _) => Dispatcher.Invoke(RefreshAllChartColors);
+            tabControl.SelectionChanged += TabControl_SelectionChanged;
             Loaded += MainWindow_Loaded;
 
             this.PreviewKeyDown += MainWindow_PreviewKeyDown; // ESC 처리
@@ -1859,7 +1859,11 @@ namespace WpfApp2
             w.WindowStyle = WindowStyle.None;
             w.ResizeMode = ResizeMode.NoResize;
             w.ShowInTaskbar = false;
-            w.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44));
+            var res = System.Windows.Application.Current.Resources;
+            w.Background = (res["WindowBackgroundBrush"] as System.Windows.Media.Brush)
+                           ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44));
+            w.Foreground = (res["ForegroundBrush"] as System.Windows.Media.Brush)
+                           ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White);
             w.BorderThickness = new Thickness(0);
         }
 
@@ -1891,7 +1895,7 @@ namespace WpfApp2
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
         {
-            var canvas = CurrentButtonCanvas;
+            var canvas = GetCanvasFromContextMenuSender(sender) ?? CurrentButtonCanvas;
             if (canvas == null) return;
 
             const double btnWidth = 54, btnHeight = 54, minGap = 5;
@@ -2071,41 +2075,217 @@ namespace WpfApp2
 
         private void CreateChartInBorder_Click(object sender, RoutedEventArgs e)
         {
-            var canvas = CurrentButtonCanvas;
+            var canvas = GetCanvasFromContextMenuSender(sender) ?? CurrentButtonCanvas;
             if (canvas == null) return;
 
-            // 차트 타입 선택 다이얼로그
+            const double dlgW = 520, dlgH = 360;
             var typeDlg = new System.Windows.Window
             {
-                Title = "차트 타입 선택",
-                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                Owner = this,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+                Left = this.Left + (this.ActualWidth  - dlgW) / 2,
+                Top  = this.Top  + (this.ActualHeight - dlgH) / 2,
                 ResizeMode = System.Windows.ResizeMode.NoResize,
-                SizeToContent = SizeToContent.WidthAndHeight
+                Width = dlgW, Height = dlgH,
+                AllowsTransparency = true,
+                WindowStyle = System.Windows.WindowStyle.None,
+                Background = System.Windows.Media.Brushes.Transparent,
+                ShowInTaskbar = false,
             };
-            MakeBorderless(typeDlg);
 
-            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-            var lineBtn = new System.Windows.Controls.Button { Content = "Line Chart (선 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
-            var barBtn = new System.Windows.Controls.Button { Content = "Bar Chart (막대 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
-            var pieBtn = new System.Windows.Controls.Button { Content = "Pie Chart (원형 그래프)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
-            var gaugeBtn = new System.Windows.Controls.Button { Content = "Gauge (게이지)", Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 6, 12, 6) };
-            var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+            var res = System.Windows.Application.Current.Resources;
+            var winBg  = (res["WindowBackgroundBrush"]  as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.DimGray;
+            var sbBg   = (res["StatusBarBackgroundBrush"] as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.Gray;
+            var fg     = (res["ForegroundBrush"]         as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.White;
+            var accent = (res["StatusBarBorderBrush"]    as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
 
-            lineBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Line"); };
-            barBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Bar"); };
-            pieBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Pie"); };
-            gaugeBtn.Click += (s, ev) => { typeDlg.Close(); ShowChartConfigDialog(canvas, "Gauge"); };
-            cancelBtn.Click += (s, ev) => typeDlg.Close();
+            var root = new Border
+            {
+                Background = winBg,
+                CornerRadius = new CornerRadius(14),
+                BorderBrush = accent, BorderThickness = new Thickness(1)
+            };
+            root.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                { BlurRadius = 20, ShadowDepth = 6, Opacity = 0.4, Color = System.Windows.Media.Colors.Black };
 
-            stack.Children.Add(lineBtn);
-            stack.Children.Add(barBtn);
-            stack.Children.Add(pieBtn);
-            stack.Children.Add(gaugeBtn);
-            stack.Children.Add(cancelBtn);
-            typeDlg.Content = stack;
-            ApplyDarkTheme(typeDlg);
+            var outer = new System.Windows.Controls.StackPanel { Margin = new Thickness(24, 20, 24, 20) };
+
+            var title = new System.Windows.Controls.TextBlock
+            {
+                Text = "차트 종류 선택",
+                FontSize = 16, FontWeight = System.Windows.FontWeights.Bold,
+                Foreground = fg, Margin = new Thickness(0, 0, 0, 18)
+            };
+            outer.Children.Add(title);
+
+            var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 2, Columns = 2, HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
+
+            (string type, string label, string subLabel, UIElement icon)[] charts =
+            {
+                ("Line",  "선 그래프",  "Line Chart",  MakeLineIcon()),
+                ("Bar",   "막대 그래프", "Bar Chart",   MakeBarIcon()),
+                ("Pie",   "원형 차트",  "Pie Chart",   MakePieIcon()),
+                ("Gauge", "게이지",    "Gauge",        MakeGaugeIcon()),
+            };
+
+            string? selectedChartType = null;
+            bool typeDlgDone = false;
+            void CloseTypeDlg() { if (typeDlgDone) return; typeDlgDone = true; typeDlg.Close(); }
+
+            foreach (var (type, label, sub, icon) in charts)
+            {
+                var card = new Border
+                {
+                    Width = 110, Height = 110,
+                    Margin = new Thickness(6),
+                    CornerRadius = new CornerRadius(10),
+                    Background = sbBg,
+                    Cursor = System.Windows.Input.Cursors.Hand
+                };
+                var cardStack = new System.Windows.Controls.StackPanel
+                    { VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                      HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
+                cardStack.Children.Add(icon);
+                cardStack.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = label, FontSize = 11, FontWeight = System.Windows.FontWeights.SemiBold,
+                    Foreground = fg, TextAlignment = System.Windows.TextAlignment.Center,
+                    Margin = new Thickness(0, 6, 0, 0)
+                });
+                cardStack.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = sub, FontSize = 9, Foreground = accent,
+                    TextAlignment = System.Windows.TextAlignment.Center
+                });
+                card.Child = cardStack;
+
+                card.MouseEnter += (s, _) => card.Background = (res["ContextMenuItemHoverBrush"] as System.Windows.Media.Brush) ?? sbBg;
+                card.MouseLeave += (s, _) => card.Background = sbBg;
+                var capturedType = type;
+                card.MouseLeftButtonUp += (s, _) => { selectedChartType = capturedType; CloseTypeDlg(); };
+                grid.Children.Add(card);
+            }
+            outer.Children.Add(grid);
+
+            var cancelRow = new System.Windows.Controls.TextBlock
+            {
+                Text = "ESC 또는 창 외부 클릭으로 닫기",
+                FontSize = 10, Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Gray),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(0, 14, 0, 0)
+            };
+            outer.Children.Add(cancelRow);
+
+            root.Child = outer;
+            typeDlg.Content = root;
+            typeDlg.KeyDown += (s, e) => { if (e.Key == Key.Escape) CloseTypeDlg(); };
+            typeDlg.Deactivated += (s, _) => { if (!typeDlgDone) CloseTypeDlg(); };
+
             typeDlg.ShowDialog();
+
+            if (selectedChartType != null)
+                ShowChartConfigDialog(canvas, selectedChartType);
+        }
+
+        private static System.Windows.Media.Brush IconStroke =>
+            (System.Windows.Application.Current.Resources["StatusBarBorderBrush"] as System.Windows.Media.Brush)
+            ?? System.Windows.Media.Brushes.SteelBlue;
+
+        private static UIElement MakeLineIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 56, Height = 36 };
+            var pts = new System.Windows.Media.PointCollection
+                { new System.Windows.Point(2,28), new System.Windows.Point(12,18), new System.Windows.Point(24,22),
+                  new System.Windows.Point(34,8), new System.Windows.Point(44,14), new System.Windows.Point(54,4) };
+            var poly = new System.Windows.Shapes.Polyline
+                { Points = pts, Stroke = IconStroke, StrokeThickness = 2,
+                  StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
+                  StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+                  StrokeEndLineCap = System.Windows.Media.PenLineCap.Round };
+            c.Children.Add(poly);
+            return c;
+        }
+
+        private static UIElement MakeBarIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 56, Height = 36 };
+            var heights = new[] { 20.0, 30.0, 14.0, 26.0, 10.0 };
+            for (int i = 0; i < heights.Length; i++)
+            {
+                var rect = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 7, Height = heights[i],
+                    Fill = IconStroke, RadiusX = 2, RadiusY = 2
+                };
+                System.Windows.Controls.Canvas.SetLeft(rect, 2 + i * 11);
+                System.Windows.Controls.Canvas.SetTop(rect, 36 - heights[i]);
+                c.Children.Add(rect);
+            }
+            return c;
+        }
+
+        private static UIElement MakePieIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 40, Height = 40 };
+            var res = System.Windows.Application.Current.Resources;
+            var accent = (res["StatusBarBorderBrush"] as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
+            var secondary = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(120, 89, 165, 169));
+            var tertiary   = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(100, 232, 168, 56));
+
+            System.Windows.Media.PathGeometry Sector(double cx, double cy, double r, double startDeg, double endDeg, System.Windows.Media.Brush fill)
+            {
+                double toRad(double d) => d * Math.PI / 180;
+                var start = new System.Windows.Point(cx + r * Math.Cos(toRad(startDeg)), cy + r * Math.Sin(toRad(startDeg)));
+                var end   = new System.Windows.Point(cx + r * Math.Cos(toRad(endDeg)),   cy + r * Math.Sin(toRad(endDeg)));
+                var fig = new System.Windows.Media.PathFigure { StartPoint = new System.Windows.Point(cx, cy) };
+                fig.Segments.Add(new System.Windows.Media.LineSegment(start, false));
+                fig.Segments.Add(new System.Windows.Media.ArcSegment(end, new System.Windows.Size(r, r), 0,
+                    endDeg - startDeg > 180, System.Windows.Media.SweepDirection.Clockwise, false));
+                fig.Segments.Add(new System.Windows.Media.LineSegment(new System.Windows.Point(cx, cy), false));
+                var geo = new System.Windows.Media.PathGeometry();
+                geo.Figures.Add(fig);
+                var path = new System.Windows.Shapes.Path { Data = geo, Fill = fill };
+                c.Children.Add(path);
+                return geo;
+            }
+
+            Sector(20, 20, 18, -90, 90, accent);
+            Sector(20, 20, 18, 90, 210, secondary);
+            Sector(20, 20, 18, 210, 270, tertiary);
+
+            var hole = new System.Windows.Shapes.Ellipse { Width = 14, Height = 14 };
+            hole.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "WindowBackgroundBrush");
+            System.Windows.Controls.Canvas.SetLeft(hole, 13);
+            System.Windows.Controls.Canvas.SetTop(hole, 13);
+            c.Children.Add(hole);
+            return c;
+        }
+
+        private static UIElement MakeGaugeIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 48, Height = 30 };
+            var res = System.Windows.Application.Current.Resources;
+            var accent = (res["StatusBarBorderBrush"] as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
+            var dim    = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(80, 120, 120, 130));
+
+            System.Windows.Shapes.Path ArcPath(double cx, double cy, double r, double startDeg, double endDeg, System.Windows.Media.Brush stroke, double thickness)
+            {
+                double toRad(double d) => d * Math.PI / 180;
+                var start = new System.Windows.Point(cx + r * Math.Cos(toRad(startDeg)), cy + r * Math.Sin(toRad(startDeg)));
+                var end   = new System.Windows.Point(cx + r * Math.Cos(toRad(endDeg)),   cy + r * Math.Sin(toRad(endDeg)));
+                var fig = new System.Windows.Media.PathFigure { StartPoint = start };
+                fig.Segments.Add(new System.Windows.Media.ArcSegment(end, new System.Windows.Size(r, r), 0,
+                    false, System.Windows.Media.SweepDirection.Clockwise, true));
+                var geo = new System.Windows.Media.PathGeometry();
+                geo.Figures.Add(fig);
+                return new System.Windows.Shapes.Path
+                    { Data = geo, Stroke = stroke, StrokeThickness = thickness,
+                      StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+                      StrokeEndLineCap   = System.Windows.Media.PenLineCap.Round };
+            }
+
+            c.Children.Add(ArcPath(24, 28, 22, 180, 360, dim, 5));
+            c.Children.Add(ArcPath(24, 28, 22, 180, 300, accent, 5));
+            return c;
         }
 
         private void ShowChartConfigDialog(Canvas canvas, string chartType)
@@ -2120,6 +2300,18 @@ namespace WpfApp2
                 Width = 450
             };
             MakeBorderless(configDlg);
+
+            // 현재 테마 색상을 다이얼로그 시스템 색상으로 오버라이드 (ComboBox popup 등에 반영)
+            var _res = System.Windows.Application.Current.Resources;
+            var _btnBg  = (_res["ContextMenuBorderBrush"]  as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.DimGray;
+            var _fg     = (_res["ForegroundBrush"]         as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.White;
+            var _accent = (_res["StatusBarBorderBrush"]    as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
+            configDlg.Resources[System.Windows.SystemColors.WindowBrushKey]       = _btnBg;
+            configDlg.Resources[System.Windows.SystemColors.WindowTextBrushKey]    = _fg;
+            configDlg.Resources[System.Windows.SystemColors.ControlBrushKey]       = _btnBg;
+            configDlg.Resources[System.Windows.SystemColors.ControlTextBrushKey]   = _fg;
+            configDlg.Resources[System.Windows.SystemColors.HighlightBrushKey]     = _accent;
+            configDlg.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = System.Windows.Media.Brushes.White;
 
             var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
 
@@ -2141,6 +2333,7 @@ namespace WpfApp2
             // 데이터 소스 선택
             stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 소스:", Margin = new Thickness(0, 0, 0, 4) });
             var sourceCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+            sourceCombo.Style = null; // MaterialDesign 스타일 제거 → WPF 기본 스타일 사용 (Background 적용됨)
             sourceCombo.Items.Add("정적 데이터 (수동 입력)");
             sourceCombo.Items.Add("JSON 파일");
             sourceCombo.Items.Add("CSV 파일");
@@ -2263,16 +2456,15 @@ namespace WpfApp2
 
         private void CreateChartControl(Canvas canvas, ChartMeta meta)
         {
-            // Border로 차트 감싸기
             var border = new System.Windows.Controls.Border
             {
                 Width = meta.Width,
                 Height = meta.Height,
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
                 BorderThickness = new Thickness(1),
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44)),
-                CornerRadius = new CornerRadius(8)
+                CornerRadius = new CornerRadius(10)
             };
+            border.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "StatusBarBackgroundBrush");
+            border.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "StatusBarBorderBrush");
 
             // 차트에 따라 LiveCharts 컨트롤 생성
             FrameworkElement chartControl = null;
@@ -2295,6 +2487,8 @@ namespace WpfApp2
 
             if (chartControl != null)
             {
+                if (chartControl is System.Windows.Controls.Control ctrl)
+                    ctrl.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
                 border.Child = chartControl;
             }
 
@@ -2352,18 +2546,49 @@ namespace WpfApp2
             SaveAllChartStates();
         }
 
+        private (SKColor bg, SKColor axisLabel, SKColor gridLine) GetChartColors() =>
+            ThemeManager.CurrentTheme switch
+            {
+                ThemeManager.Theme.White => (
+                    new SKColor(228, 228, 240),
+                    new SKColor(80,  80,  112),
+                    new SKColor(196, 196, 212)),
+                ThemeManager.Theme.Black => (
+                    new SKColor(7,   7,   7),
+                    new SKColor(144, 144, 144),
+                    new SKColor(37,  37,  37)),
+                _ => (
+                    new SKColor(19, 19, 27),
+                    new SKColor(160, 160, 170),
+                    new SKColor(55,  55,  65))
+            };
+
+        // 전문적인 차트 색상 팔레트 (채도 낮춘 Tableau 스타일)
+        private static readonly SKColor P_Blue   = SKColor.Parse("#4E79A7");
+        private static readonly SKColor P_Amber  = SKColor.Parse("#E8A838");
+        private static readonly SKColor P_Teal   = SKColor.Parse("#59A5A9");
+        private static readonly SKColor P_Purple = SKColor.Parse("#9A6AA0");
+        private static readonly SKColor P_Rust   = SKColor.Parse("#C0614A");
+        private static readonly SKColor P_Sage   = SKColor.Parse("#4F8C5E");
+
         private CartesianChart CreateLineChart(ChartMeta meta)
         {
+            var (_, axisLabel, gridLine) = GetChartColors();
+            var lineColor = P_Blue;
             var chart = new CartesianChart
             {
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = new ISeries[]
                 {
                     new LineSeries<double>
                     {
                         Values = meta.StaticData,
-                        Fill = null,
-                        Stroke = new SolidColorPaint(SKColors.CornflowerBlue) { StrokeThickness = 3 },
-                        GeometrySize = 8
+                        Stroke = new SolidColorPaint(lineColor) { StrokeThickness = 1.5f },
+                        Fill = new LinearGradientPaint(
+                            new[] { lineColor.WithAlpha(55), lineColor.WithAlpha(0) },
+                            new SKPoint(0, 0), new SKPoint(0, 1)),
+                        GeometrySize = 0,
+                        LineSmoothness = 0.65
                     }
                 },
                 XAxes = new[]
@@ -2372,35 +2597,42 @@ namespace WpfApp2
                     {
                         Labels = meta.Labels,
                         LabelsRotation = 0,
-                        LabelsPaint = new SolidColorPaint(SKColors.White),
-                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
+                        TicksPaint = null
                     }
                 },
                 YAxes = new[]
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(SKColors.White),
-                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
+                        TicksPaint = null
                     }
-                },
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+                }
             };
-
             return chart;
         }
 
         private CartesianChart CreateBarChart(ChartMeta meta)
         {
+            var (_, axisLabel, gridLine) = GetChartColors();
             var chart = new CartesianChart
             {
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = new ISeries[]
                 {
                     new ColumnSeries<double>
                     {
                         Values = meta.StaticData,
-                        Fill = new SolidColorPaint(SKColors.Orange),
-                        Stroke = null
+                        Fill = new LinearGradientPaint(
+                            new[] { P_Blue.WithAlpha(220), P_Teal.WithAlpha(200) },
+                            new SKPoint(0, 0), new SKPoint(0, 1)),
+                        Stroke = null,
+                        Rx = 3,
+                        Ry = 3,
+                        MaxBarWidth = 28
                     }
                 },
                 XAxes = new[]
@@ -2408,76 +2640,133 @@ namespace WpfApp2
                     new Axis
                     {
                         Labels = meta.Labels,
-                        LabelsRotation = 0,
-                        LabelsPaint = new SolidColorPaint(SKColors.White),
-                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        SeparatorsPaint = null,
+                        TicksPaint = null
                     }
                 },
                 YAxes = new[]
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(SKColors.White),
-                        SeparatorsPaint = new SolidColorPaint(SKColors.Gray) { StrokeThickness = 1 }
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
+                        TicksPaint = null
                     }
-                },
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+                }
             };
-
             return chart;
         }
 
         private PieChart CreatePieChart(ChartMeta meta)
         {
+            var (chartBg, axisLabel, _) = GetChartColors();
+            var palette = new[] { P_Blue, P_Amber, P_Teal, P_Purple, P_Rust, P_Sage };
             var series = new List<ISeries>();
             for (int i = 0; i < meta.StaticData.Count; i++)
             {
                 series.Add(new PieSeries<double>
                 {
                     Values = new[] { meta.StaticData[i] },
-                    Name = i < meta.Labels.Count ? meta.Labels[i] : $"항목{i + 1}"
+                    Name = i < meta.Labels.Count ? meta.Labels[i] : $"항목{i + 1}",
+                    Fill = new SolidColorPaint(palette[i % palette.Length]),
+                    Stroke = new SolidColorPaint(chartBg) { StrokeThickness = 1.5f },
+                    InnerRadius = 38,
+                    OuterRadiusOffset = 0,
+                    HoverPushout = 4
                 });
             }
-
             var chart = new PieChart
             {
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = series,
                 LegendPosition = LiveChartsCore.Measure.LegendPosition.Right,
-                LegendTextPaint = new SolidColorPaint(SKColors.White),
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+                LegendTextPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") }
             };
-
             return chart;
         }
 
         private PieChart CreateGaugeChart(ChartMeta meta)
         {
-            double value = meta.StaticData.Count > 0 ? meta.StaticData[0] : 0;
+            var (_, _, gridLine) = GetChartColors();
+            double value    = meta.StaticData.Count > 0 ? meta.StaticData[0] : 0;
             double maxValue = meta.StaticData.Count > 1 ? meta.StaticData[1] : 100;
 
             var chart = new PieChart
             {
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = new ISeries[]
                 {
                     new PieSeries<double>
                     {
                         Values = new[] { value },
-                        Fill = new SolidColorPaint(SKColors.LimeGreen),
-                        DataLabelsSize = 20,
-                        DataLabelsPaint = new SolidColorPaint(SKColors.White)
+                        Fill = new LinearGradientPaint(
+                            new[] { P_Blue, P_Teal },
+                            new SKPoint(0, 0), new SKPoint(1, 0)),
+                        Stroke = null,
+                        InnerRadius = 55,
+                        HoverPushout = 0
                     },
                     new PieSeries<double>
                     {
                         Values = new[] { maxValue - value },
-                        Fill = new SolidColorPaint(SKColors.DarkGray)
+                        Fill = new SolidColorPaint(gridLine.WithAlpha(120)),
+                        Stroke = null,
+                        InnerRadius = 55,
+                        HoverPushout = 0
                     }
                 },
                 InitialRotation = -90,
-                MaxAngle = 360,
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44))
+                MaxAngle = 360
             };
-
             return chart;
+        }
+
+        private void RefreshAllChartColors()
+        {
+            for (int i = 0; i < tabControl.Items.Count; i++)
+            {
+                var canvas = GetCanvasByIndex(i);
+                if (canvas == null) continue;
+                foreach (UIElement child in canvas.Children)
+                {
+                    if (child is System.Windows.Controls.Border chartBorder && chartBorder.Tag is ChartMeta meta)
+                    {
+                        chartBorder.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "StatusBarBackgroundBrush");
+                        chartBorder.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "StatusBarBorderBrush");
+
+                        FrameworkElement? newChart = meta.ChartType switch
+                        {
+                            "Line"  => CreateLineChart(meta),
+                            "Bar"   => CreateBarChart(meta),
+                            "Pie"   => CreatePieChart(meta),
+                            "Gauge" => CreateGaugeChart(meta),
+                            _       => null
+                        };
+                        if (newChart != null)
+                        {
+                            if (newChart is System.Windows.Controls.Control ctrl)
+                                ctrl.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
+                            chartBorder.Child = newChart;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void TabControl_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (e.Source != tabControl) return; // 내부 컨트롤의 이벤트 버블링 무시
+            int idx = tabControl.SelectedIndex;
+            if (idx < 0) return;
+            var canvas = GetCanvasByIndex(idx);
+            if (canvas == null) return;
+
+            foreach (UIElement child in canvas.Children.OfType<UIElement>().ToList())
+            {
+                if (child is System.Windows.Controls.Border chartBorder && chartBorder.Tag is ChartMeta meta)
+                    RefreshChartData(chartBorder, meta);
+            }
         }
 
         private void AttachChartDragHandlers(Border border, Canvas canvas)
@@ -2801,17 +3090,17 @@ namespace WpfApp2
                         meta.Labels = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(labelsJson) ?? new List<string>();
                     }
 
-                    // Border 생성
+                    // Border 생성 (SetResourceReference로 테마 동적 적용)
                     var border = new System.Windows.Controls.Border
                     {
                         Width = meta.Width,
                         Height = meta.Height,
-                        BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
                         BorderThickness = new Thickness(1),
-                        Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44)),
                         CornerRadius = new CornerRadius(8),
                         Tag = meta
                     };
+                    border.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "StatusBarBackgroundBrush");
+                    border.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "StatusBarBorderBrush");
 
                     // 위치 설정
                     double x = Convert.ToDouble(chartData["X"]);
@@ -2839,6 +3128,8 @@ namespace WpfApp2
 
                     if (chartControl != null)
                     {
+                        if (chartControl is System.Windows.Controls.Control ctrl2)
+                            ctrl2.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
                         border.Child = chartControl;
                     }
 
@@ -2897,6 +3188,17 @@ namespace WpfApp2
         {
             return FindName($"ButtonCanvas{index + 1}") as Canvas;
         }
+
+        private Canvas? GetCanvasFromContextMenuSender(object sender)
+        {
+            if (sender is MenuItem menuItem &&
+                menuItem.Parent is ContextMenu cm &&
+                cm.PlacementTarget is Border b &&
+                b.Child is Canvas c)
+                return c;
+            return null;
+        }
+
         private Canvas? CurrentButtonCanvas
         {
             get
@@ -2956,11 +3258,16 @@ namespace WpfApp2
         private void ApplyDarkTheme(Window dlg)
         {
             if (dlg.Tag is string tag && tag == "DarkThemedSimple") return;
-            var windowBg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44));
+            var res = System.Windows.Application.Current.Resources;
+            var windowBg = (res["WindowBackgroundBrush"] as System.Windows.Media.Brush)
+                           ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(44, 44, 44));
             var panelBg = windowBg;
-            var buttonBg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(58, 58, 58));
-            var hoverBg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(69, 69, 69));
-            var fgBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White);
+            var buttonBg = (res["ContextMenuBorderBrush"] as System.Windows.Media.Brush)
+                           ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(58, 58, 58));
+            var hoverBg = (res["ContextMenuItemHoverBrush"] as System.Windows.Media.Brush)
+                          ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(69, 69, 69));
+            var fgBrush = (res["ForegroundBrush"] as System.Windows.Media.Brush)
+                          ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White);
             dlg.Background = windowBg;
             dlg.Foreground = fgBrush;
             dlg.Tag = "DarkThemedSimple";
@@ -2979,7 +3286,8 @@ namespace WpfApp2
                     case System.Windows.Controls.TextBox tb:
                         tb.Background = buttonBg;
                         tb.Foreground = fgBrush;
-                        tb.BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 85, 85));
+                        tb.BorderBrush = (res["StatusBarBorderBrush"] as System.Windows.Media.Brush)
+                                         ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 85, 85));
                         tb.CaretBrush = fgBrush;
                         break;
                     case System.Windows.Controls.TextBlock t:
@@ -3446,10 +3754,7 @@ namespace WpfApp2
             var newTabItem = new TabItem
             {
                 Header = "새 탭",
-                Height = 40,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White),
-                BorderBrush = (System.Windows.Media.Brush)FindResource("WindowBackgroundBrush"),
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(35, 35, 35))
+                Height = 40
             };
 
             // TabItem ContextMenu 추가 (이름 수정 및 탭 삭제 기능)
@@ -3464,24 +3769,19 @@ namespace WpfApp2
 
             var border = new Border
             {
-                Background = (System.Windows.Media.Brush)FindResource("StatusBarBackgroundBrush"),
                 CornerRadius = new CornerRadius(16),
                 Margin = new Thickness(0, 0, 0, 3)
             };
-
-            // Border Resources 추가
-            var buttonStyle = new Style(typeof(System.Windows.Controls.Button));
-            var pressTrigger = new Trigger { Property = System.Windows.Controls.Button.IsPressedProperty, Value = true };
-            pressTrigger.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, FindResource("StatusBarBorderBrush")));
-            pressTrigger.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White)));
-            buttonStyle.Triggers.Add(pressTrigger);
-            border.Resources.Add(typeof(System.Windows.Controls.Button), buttonStyle);
+            border.SetResourceReference(Border.BackgroundProperty, "StatusBarBackgroundBrush");
 
             // ContextMenu 추가
             var contextMenu = new ContextMenu();
             var menuItem = new MenuItem { Header = "버튼생성" };
             menuItem.Click += CreateButtonInBorder_Click;
             contextMenu.Items.Add(menuItem);
+            var chartMenuItem = new MenuItem { Header = "차트생성" };
+            chartMenuItem.Click += CreateChartInBorder_Click;
+            contextMenu.Items.Add(chartMenuItem);
             border.ContextMenu = contextMenu;
             border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
 
@@ -3605,10 +3905,7 @@ namespace WpfApp2
                     var newTabItem = new TabItem
                     {
                         Header = state.Header,
-                        Height = 40,
-                        Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White),
-                        BorderBrush = (System.Windows.Media.Brush)FindResource("WindowBackgroundBrush"),
-                        Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(35, 35, 35))
+                        Height = 40
                     };
 
                     // TabItem ContextMenu 추가
@@ -3623,24 +3920,19 @@ namespace WpfApp2
 
                     var border = new Border
                     {
-                        Background = (System.Windows.Media.Brush)FindResource("StatusBarBackgroundBrush"),
                         CornerRadius = new CornerRadius(16),
                         Margin = new Thickness(0, 0, 0, 3)
                     };
-
-                    // Border Resources 추가
-                    var buttonStyle = new Style(typeof(System.Windows.Controls.Button));
-                    var pressTrigger = new Trigger { Property = System.Windows.Controls.Button.IsPressedProperty, Value = true };
-                    pressTrigger.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, FindResource("StatusBarBorderBrush")));
-                    pressTrigger.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White)));
-                    buttonStyle.Triggers.Add(pressTrigger);
-                    border.Resources.Add(typeof(System.Windows.Controls.Button), buttonStyle);
+                    border.SetResourceReference(Border.BackgroundProperty, "StatusBarBackgroundBrush");
 
                     // ContextMenu 추가
                     var contextMenu = new ContextMenu();
                     var menuItem = new MenuItem { Header = "버튼생성" };
                     menuItem.Click += CreateButtonInBorder_Click;
                     contextMenu.Items.Add(menuItem);
+                    var chartMenuItem = new MenuItem { Header = "차트생성" };
+                    chartMenuItem.Click += CreateChartInBorder_Click;
+                    contextMenu.Items.Add(chartMenuItem);
                     border.ContextMenu = contextMenu;
                     border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
 

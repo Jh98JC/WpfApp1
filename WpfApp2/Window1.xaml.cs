@@ -27,11 +27,209 @@ namespace WpfApp2
             InitializeComponent();
             SourceInitialized += Window1_SourceInitialized;
 
-            // Assembly에서 실제 버전 읽어오기
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             if (version != null)
-            {
                 versionText.Text = $"v{version.Major}.{version.Minor}.{version.Build}";
+
+            BuildThemeCards();
+        }
+
+        // ── 테마 카드 ─────────────────────────────────────────────────────────
+
+        private readonly (ThemeManager.Theme theme, string label,
+                           string bgTop, string bgBot,
+                           string tabSelTop, string tabSelBot,
+                           string tabNormTop, string tabNormBot,
+                           string accent, string textSel, string textNorm)[] _themes =
+        {
+            (ThemeManager.Theme.Purple, "PURPLE",
+             "#1A1A22", "#13131B", "#2A2A3E", "#1C1C2E", "#1D1D26", "#141419",
+             "#5575EE", "#FFFFFF", "#8888A0"),
+            (ThemeManager.Theme.Black, "BLACK",
+             "#0D0D0D", "#070707", "#282828", "#1C1C1C", "#111111", "#080808",
+             "#606060", "#D0D0D0", "#505060"),
+            (ThemeManager.Theme.White, "WHITE",
+             "#F0F0F6", "#E4E4F0", "#C8C8E4", "#B8B8D4", "#E6E6F2", "#DCDCE8",
+             "#5575EE", "#1A1A2A", "#8080A0"),
+        };
+
+        private Border[] _cards = Array.Empty<Border>();
+
+        private void BuildThemeCards()
+        {
+            _cards = new Border[_themes.Length];
+            for (int i = 0; i < _themes.Length; i++)
+            {
+                var t = _themes[i];
+                var card = CreateThemeCard(t.theme, t.label,
+                    t.bgTop, t.bgBot,
+                    t.tabSelTop, t.tabSelBot,
+                    t.tabNormTop, t.tabNormBot,
+                    t.accent, t.textSel, t.textNorm);
+                _cards[i] = card;
+                ThemePanel.Children.Add(card);
+            }
+            UpdateCardSelection();
+        }
+
+        private static System.Windows.Media.Color TC(string h) =>
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(h);
+        private static System.Windows.Media.LinearGradientBrush TLGB(string top, string bot) =>
+            new System.Windows.Media.LinearGradientBrush(
+                new System.Windows.Media.GradientStopCollection
+                {
+                    new System.Windows.Media.GradientStop(TC(top), 0),
+                    new System.Windows.Media.GradientStop(TC(bot), 1)
+                },
+                new System.Windows.Point(0, 0), new System.Windows.Point(0, 1));
+        private static System.Windows.Media.SolidColorBrush TSB(string h) =>
+            new System.Windows.Media.SolidColorBrush(TC(h));
+
+        private Border CreateThemeCard(ThemeManager.Theme theme, string label,
+            string bgTop, string bgBot,
+            string selTop, string selBot,
+            string normTop, string normBot,
+            string accent, string textSel, string textNorm)
+        {
+            var card = new Border
+            {
+                Width = 174, Height = 100,
+                Margin = new Thickness(0, 0, 8, 0),
+                CornerRadius = new CornerRadius(10),
+                BorderThickness = new Thickness(2),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Tag = theme, ClipToBounds = true,
+                Background = TLGB(bgTop, bgBot)
+            };
+
+            var grid = new Grid();
+
+            // 미니 탭 스트립
+            var tabStrip = new StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                Margin = new Thickness(10, 0, 0, 10),
+                Width = 60
+            };
+
+            var selTab = new Border
+            {
+                Height = 20, Margin = new Thickness(0, 0, 0, 4),
+                CornerRadius = new CornerRadius(4),
+                Background = TLGB(selTop, selBot)
+            };
+            selTab.Child = new Border
+            {
+                Width = 3,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                CornerRadius = new CornerRadius(2),
+                Background = TSB(accent)
+            };
+
+            var normTab = new Border
+            {
+                Height = 20, CornerRadius = new CornerRadius(4),
+                Background = TLGB(normTop, normBot)
+            };
+            normTab.Child = new TextBlock
+            {
+                Text = "탭", FontSize = 8, Foreground = TSB(textNorm),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+
+            tabStrip.Children.Add(selTab);
+            tabStrip.Children.Add(normTab);
+
+            var contentArea = new Border
+            {
+                Margin = new Thickness(75, 10, 10, 35),
+                CornerRadius = new CornerRadius(4),
+                Background = TLGB(bgTop, bgBot),
+                Opacity = 0.5
+            };
+
+            var bgBotColor = TC(bgBot);
+            var labelBar = new Border
+            {
+                VerticalAlignment = System.Windows.VerticalAlignment.Bottom,
+                Height = 32,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromArgb(200, bgBotColor.R, bgBotColor.G, bgBotColor.B))
+            };
+            var labelGrid = new Grid();
+            labelGrid.Children.Add(new TextBlock
+            {
+                Text = label, FontWeight = System.Windows.FontWeights.Bold, FontSize = 11,
+                Foreground = TSB(accent),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center
+            });
+            var checkDot = new Ellipse
+            {
+                Width = 8, Height = 8, Fill = TSB(accent),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0),
+                Visibility = System.Windows.Visibility.Collapsed
+            };
+            labelGrid.Children.Add(checkDot);
+            labelBar.Child = labelGrid;
+
+            grid.Children.Add(tabStrip);
+            grid.Children.Add(contentArea);
+            grid.Children.Add(labelBar);
+            card.Child = grid;
+
+            card.MouseEnter += (s, e) =>
+            {
+                if ((ThemeManager.Theme)card.Tag != ThemeManager.CurrentTheme)
+                    card.BorderBrush = TSB(accent);
+            };
+            card.MouseLeave += (s, e) =>
+            {
+                if ((ThemeManager.Theme)card.Tag != ThemeManager.CurrentTheme)
+                    card.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            };
+            card.MouseLeftButtonUp += (s, e) =>
+            {
+                ThemeManager.Apply((ThemeManager.Theme)card.Tag);
+                UpdateCardSelection();
+            };
+
+            return card;
+        }
+
+        private void UpdateCardSelection()
+        {
+            for (int i = 0; i < _cards.Length; i++)
+            {
+                var card = _cards[i];
+                var t = _themes[i];
+                bool selected = ThemeManager.CurrentTheme == t.theme;
+
+                card.BorderBrush = selected
+                    ? TSB(t.accent)
+                    : System.Windows.Media.Brushes.Transparent;
+
+                if (card.Child is Grid grid)
+                {
+                    foreach (var child in grid.Children)
+                    {
+                        if (child is Border bar && bar.Child is Grid lGrid)
+                        {
+                            foreach (var lc in lGrid.Children)
+                            {
+                                if (lc is Ellipse dot)
+                                    dot.Visibility = selected
+                                        ? System.Windows.Visibility.Visible
+                                        : System.Windows.Visibility.Collapsed;
+                            }
+                        }
+                    }
+                }
             }
         }
 

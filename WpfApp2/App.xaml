@@ -31,14 +31,50 @@
             <SolidColorBrush x:Key="DangerForegroundBrush" Color="#FF5A5A"/>
             <SolidColorBrush x:Key="DangerHoverBrush" Color="#662B2B"/>
 
+            <!-- 탭 브러시 (런타임에 ThemeManager가 교체) -->
+            <LinearGradientBrush x:Key="TabNormalBrush" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#1D1D26" Offset="0"/>
+                <GradientStop Color="#141419" Offset="1"/>
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="TabHoverBrush" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#252532" Offset="0"/>
+                <GradientStop Color="#1A1A25" Offset="1"/>
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="TabSelectedBrush" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#2A2A3E" Offset="0"/>
+                <GradientStop Color="#1C1C2E" Offset="1"/>
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="TabAccentBrush" StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#8BAAFF" Offset="0"/>
+                <GradientStop Color="#5575EE" Offset="1"/>
+            </LinearGradientBrush>
+            <SolidColorBrush x:Key="TabTextNormalBrush"   Color="#8888A0"/>
+            <SolidColorBrush x:Key="TabTextHoverBrush"    Color="#C8C8DC"/>
+            <SolidColorBrush x:Key="TabTextSelectedBrush" Color="#FFFFFF"/>
+
             <Style TargetType="ContextMenu">
-                <Setter Property="Background" Value="{StaticResource ContextMenuBackgroundBrush}"/>
-                <Setter Property="BorderBrush" Value="{StaticResource ContextMenuBorderBrush}"/>
+                <Setter Property="Background" Value="{DynamicResource ContextMenuBackgroundBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ContextMenuBorderBrush}"/>
                 <Setter Property="BorderThickness" Value="1"/>
-                <Setter Property="Foreground" Value="{StaticResource ContextMenuForegroundBrush}"/>
-                <Setter Property="Padding" Value="2"/>
-                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Foreground" Value="{DynamicResource ContextMenuForegroundBrush}"/>
+                <Setter Property="FontSize" Value="13"/>
                 <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContextMenu">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="4" CornerRadius="8"
+                                    SnapsToDevicePixels="True">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.35" Color="#000000"/>
+                                </Border.Effect>
+                                <StackPanel IsItemsHost="True"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <Style TargetType="Separator">
@@ -56,28 +92,31 @@
 
             <Style TargetType="MenuItem">
                 <Setter Property="OverridesDefaultStyle" Value="True"/>
-                <Setter Property="Foreground" Value="{StaticResource ContextMenuForegroundBrush}"/>
-                <Setter Property="Padding" Value="8,4"/>
-                <Setter Property="Background" Value="{StaticResource ContextMenuBackgroundBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ContextMenuForegroundBrush}"/>
+                <Setter Property="Padding" Value="12,7"/>
+                <Setter Property="MinHeight" Value="34"/>
+                <Setter Property="Background" Value="{DynamicResource ContextMenuBackgroundBrush}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="MenuItem">
-                            <Border x:Name="Bd" Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}" SnapsToDevicePixels="True"
+                                    MinHeight="{TemplateBinding MinHeight}" CornerRadius="4" Margin="2,1">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition x:Name="IconCol" Width="16"/>
+                                        <ColumnDefinition x:Name="IconCol" Width="0"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <ContentPresenter x:Name="IconPresenter" Grid.Column="0" ContentSource="Icon" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                                    <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"/>
+                                    <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"
+                                                      Margin="{TemplateBinding Padding}"/>
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource ContextMenuItemHoverBrush}"/>
+                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ContextMenuItemHoverBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsPressed" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource ContextMenuItemPressedBrush}"/>
+                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ContextMenuItemPressedBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter Property="Opacity" Value="0.5"/>
@@ -106,8 +145,8 @@
             </Style>
 
             <Style x:Key="TitleBarButtonStyle" TargetType="Button">
-                <Setter Property="Background" Value="{StaticResource StatusBarBackgroundBrush}" />
-                <Setter Property="Foreground" Value="{StaticResource ForegroundBrush}" />
+                <Setter Property="Background" Value="{DynamicResource StatusBarBackgroundBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}" />
                 <Setter Property="BorderThickness" Value="0"/>
                 <Setter Property="Width" Value="40"/>
                 <Setter Property="Height" Value="32"/>
@@ -122,7 +161,7 @@
                 </Setter>
                 <Style.Triggers>
                     <Trigger Property="IsMouseOver" Value="True">
-                        <Setter Property="Background" Value="{StaticResource TitleBarButtonHoverBrush}" />
+                        <Setter Property="Background" Value="{DynamicResource TitleBarButtonHoverBrush}" />
                     </Trigger>
                 </Style.Triggers>
             </Style>

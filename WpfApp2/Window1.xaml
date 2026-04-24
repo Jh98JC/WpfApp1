@@ -31,15 +31,22 @@
                     <TextBlock VerticalAlignment="Center" Margin="20,0,0,0" FontWeight="Bold" Text="Setting"
                                MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"/>
                     <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,6,0">
-                        <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
-                        <Button Content="☐" Style="{StaticResource TitleBarButtonStyle}" Click="MaximizeRestore_Click" Height="32" Width="40" BorderBrush="{DynamicResource ForegroundBrush}" Background="{DynamicResource WindowBackgroundBrush}"/>
-                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
+                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40"/>
                     </StackPanel>
                 </Grid>
             </Border>
             <Border BorderBrush="{DynamicResource WindowBackgroundBrush}" BorderThickness="1" Width="598" CornerRadius="0,0,16,16">
                 <Grid>
                     <Button x:Name="textsharp" Content="글꼴" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0" Background="{DynamicResource ContextMenuBorderBrush}" Width="71" Click="textsharp_Click"/>
+
+                    <!-- 테마 섹션 -->
+                    <TextBlock Text="테마" FontWeight="Bold" FontSize="13"
+                               HorizontalAlignment="Left" VerticalAlignment="Top"
+                               Margin="10,48,0,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                    <StackPanel x:Name="ThemePanel" Orientation="Horizontal"
+                                HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="10,70,0,0"/>
+
                     <Button x:Name="addTab" Content="탭 추가" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,287,0,0" Background="{DynamicResource ContextMenuBorderBrush}" Width="93" Click="addTab_Click"/>
                     <TextBlock x:Name="versionText" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,330,0,0" FontWeight="Bold" FontSize="14" Foreground="{DynamicResource ForegroundBrush}"/>
                     <Button x:Name="clear" Content="버튼초기화" HorizontalAlignment="Left" Height="25" Margin="492,331,0,0" VerticalAlignment="Top" Width="94" FontSize="12" Background="#FFFF9A9A" BorderBrush="#FFFF9A9A" FontWeight="Bold" Click="clear_Click"/>

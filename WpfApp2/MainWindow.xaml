@@ -87,8 +87,8 @@
                         </Button.Template>
                     </Button>
                     <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="80" Margin="0,0,3,0">
-                        <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
-                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40" Background="{DynamicResource WindowBackgroundBrush}"/>
+                        <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40"/>
+                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40"/>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -131,32 +131,42 @@
                                 </Setter>
                             </Style>
                             <Style TargetType="{x:Type TabItem}">
-                                <Setter Property="Background" Value="#FFF"/>
-                                <Setter Property="BorderBrush" Value="#FF272727"/>
-                                <Setter Property="Foreground" Value="Black"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TabTextNormalBrush}"/>
+                                <Setter Property="Height" Value="40"/>
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="{x:Type TabItem}">
-                                            <Border x:Name="Border"
-                                                    Background="{TemplateBinding Background}"
-                                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="5"
-                                                    Padding="8,4"
-                                                    Margin="2,2,2,0" Width="120">
-                                                <ContentPresenter x:Name="ContentSite"
-                                                                  VerticalAlignment="Center"
-                                                                  HorizontalAlignment="Center"
-                                                                  ContentSource="Header"
-                                                                  RecognizesAccessKey="True"/>
-                                            </Border>
+                                            <Grid Width="120" Margin="3,2,3,2">
+                                                <Border x:Name="AccentBar"
+                                                        Width="3"
+                                                        HorizontalAlignment="Left"
+                                                        CornerRadius="1.5"
+                                                        Background="{DynamicResource TabAccentBrush}"
+                                                        Opacity="0"/>
+                                                <Border x:Name="MainBorder"
+                                                        CornerRadius="6"
+                                                        Background="{DynamicResource TabNormalBrush}">
+                                                    <ContentPresenter x:Name="ContentSite"
+                                                                      Margin="12,0,8,0"
+                                                                      VerticalAlignment="Center"
+                                                                      HorizontalAlignment="Center"
+                                                                      ContentSource="Header"
+                                                                      RecognizesAccessKey="True"/>
+                                                </Border>
+                                            </Grid>
                                             <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="MainBorder" Property="Background" Value="{DynamicResource TabHoverBrush}"/>
+                                                    <Setter TargetName="AccentBar" Property="Opacity" Value="0.35"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource TabTextHoverBrush}"/>
+                                                </Trigger>
                                                 <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="Border" Property="Background" Value="{DynamicResource StatusBarBorderBrush}"/>
-                                                    <Setter Property="Foreground" Value="White"/>
+                                                    <Setter TargetName="MainBorder" Property="Background" Value="{DynamicResource TabSelectedBrush}"/>
+                                                    <Setter TargetName="AccentBar" Property="Opacity" Value="1"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource TabTextSelectedBrush}"/>
                                                 </Trigger>
                                                 <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="Border" Property="Opacity" Value="0.6"/>
+                                                    <Setter TargetName="MainBorder" Property="Opacity" Value="0.5"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -171,7 +181,7 @@
                                     <MenuItem Header="탭 삭제" Click="DeleteTabItem_Click"/>
                                 </ContextMenu>
                             </TabItem.ContextMenu>
-                            <Border CornerRadius="16" Margin="0,-8,0,11" ContextMenuOpening="DynamicButtonBorder_ContextMenuOpening" Background="{DynamicResource StatusBarBackgroundBrush}">
+                            <Border CornerRadius="16" Margin="0,0,0,3" ContextMenuOpening="DynamicButtonBorder_ContextMenuOpening" Background="{DynamicResource StatusBarBackgroundBrush}">
                                 <Border.Resources>
                                     <Style TargetType="{x:Type Button}">
                                         <Style.Triggers>
