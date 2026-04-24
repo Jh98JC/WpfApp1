@@ -1,76 +1,127 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.IO;
-using System.Linq;
-using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
+using WpfColor     = System.Windows.Media.Color;
+using WpfPoint     = System.Windows.Point;
+using WpfMouseArgs = System.Windows.Input.MouseEventArgs;
 
 namespace WpfApp2
 {
-    /// <summary>
-    /// Window3.xaml에 대한 상호 작용 논리
-    /// </summary>
     public partial class Window3 : Window
     {
-        // 설정 파일을 사용자 AppData 폴더에 저장
         private static readonly string AppDataFolder = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 
-            "WpfApp2");
-
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WpfApp2");
         private static readonly string PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
+
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int idx);
+        [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hwnd, int idx, int val);
+        const int GWL_EXSTYLE      = -20;
+        const int WS_EX_NOACTIVATE = 0x08000000;
+
+        private bool     _isDragging;
+        private WpfPoint _dragOffset;
+
+        // ── 브러시 ─────────────────────────────────────────────────
+
+        private static WpfColor C(string hex) =>
+            (WpfColor)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+
+        private static T Freeze<T>(T b) where T : Freezable { b.Freeze(); return b; }
+
+        private static LinearGradientBrush LGB(string top, string bot) => Freeze(
+            new LinearGradientBrush(
+                new GradientStopCollection { new GradientStop(C(top), 0), new GradientStop(C(bot), 1) },
+                new WpfPoint(0, 0), new WpfPoint(0, 1)));
+
+        private static LinearGradientBrush LGBDiag(string top, string bot) => Freeze(
+            new LinearGradientBrush(
+                new GradientStopCollection { new GradientStop(C(top), 0), new GradientStop(C(bot), 1) },
+                new WpfPoint(0, 0), new WpfPoint(1, 1)));
+
+        private static readonly LinearGradientBrush _bgN = LGB("#2E2E2E", "#141414");
+        private static readonly LinearGradientBrush _bgH = LGB("#3C3C3C", "#202020");
+
+        private static readonly SolidColorBrush _borderN = Freeze(new SolidColorBrush(C("#484848")));
+        private static readonly SolidColorBrush _borderH = Freeze(new SolidColorBrush(C("#787878")));
+
+        private static readonly LinearGradientBrush _gN = LGBDiag("#E8E8E8", "#A0A0A0");
+        private static readonly LinearGradientBrush _gH = LGBDiag("#FFFFFF", "#D8D8D8");
+
+        // ── 생성자 / 초기화 ────────────────────────────────────────
 
         public Window3()
         {
-            // AppData 폴더 생성 (없으면)
-            if (!Directory.Exists(AppDataFolder))
-            {
-                Directory.CreateDirectory(AppDataFolder);
-            }
-
+            if (!Directory.Exists(AppDataFolder)) Directory.CreateDirectory(AppDataFolder);
             InitializeComponent();
             RestorePosition();
         }
 
-        // 명확한 네임스페이스 지정
-        protected override void OnActivated(EventArgs e)
+        protected override void OnSourceInitialized(EventArgs e)
         {
-
+            base.OnSourceInitialized(e);
+            var hwnd = new WindowInteropHelper(this).Handle;
+            SetWindowLong(hwnd, GWL_EXSTYLE, GetWindowLong(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
         }
+
+        // ── 호버 ───────────────────────────────────────────────────
+
+        private void Pill_MouseEnter(object sender, WpfMouseArgs e)
+        {
+            Pill.Background   = _bgH;
+            Pill.BorderBrush  = _borderH;
+            GPath.Stroke      = _gH;
+        }
+
+        private void Pill_MouseLeave(object sender, WpfMouseArgs e)
+        {
+            Pill.Background   = _bgN;
+            Pill.BorderBrush  = _borderN;
+            GPath.Stroke      = _gN;
+        }
+
+        // ── 수동 드래그 ────────────────────────────────────────────
+
+        private void MainGrid_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isDragging = true;
+            _dragOffset = e.GetPosition(this);
+            Pill.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void MainGrid_MouseMove(object sender, WpfMouseArgs e)
+        {
+            if (!_isDragging || e.LeftButton != MouseButtonState.Pressed) return;
+            var screen = PointToScreen(e.GetPosition(this));
+            Left = screen.X - _dragOffset.X;
+            Top  = screen.Y - _dragOffset.Y;
+        }
+
+        private void MainGrid_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!_isDragging) return;
+            _isDragging = false;
+            Pill.ReleaseMouseCapture();
+            SavePosition();
+        }
+
+        // ── 우클릭 위치 저장 ───────────────────────────────────────
 
         private void Grid_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // 현재 위치 저장
             SavePosition();
-            System.Windows.MessageBox.Show($"현재 위치가 저장되었습니다.\nX: {this.Left}, Y: {this.Top}", "위치 저장");
-            e.Handled = true; // 이벤트 전파 방지
+            e.Handled = true;
         }
 
         private void SavePosition()
         {
-            try
-            {
-                var position = new Window3Position
-                {
-                    Left = this.Left,
-                    Top = this.Top
-                };
-
-                var json = JsonSerializer.Serialize(position);
-                File.WriteAllText(PositionFile, json);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Window3 position save error: " + ex);
-            }
+            try { File.WriteAllText(PositionFile, JsonSerializer.Serialize(new Window3Position { Left = Left, Top = Top })); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Window3 save: " + ex); }
         }
 
         private void RestorePosition()
@@ -78,26 +129,12 @@ namespace WpfApp2
             try
             {
                 if (!File.Exists(PositionFile)) return;
-
-                var json = File.ReadAllText(PositionFile);
-                var position = JsonSerializer.Deserialize<Window3Position>(json);
-
-                if (position != null)
-                {
-                    this.Left = position.Left;
-                    this.Top = position.Top;
-                }
+                var p = JsonSerializer.Deserialize<Window3Position>(File.ReadAllText(PositionFile));
+                if (p != null) { Left = p.Left; Top = p.Top; }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Window3 position restore error: " + ex);
-            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Window3 restore: " + ex); }
         }
     }
 
-    public class Window3Position
-    {
-        public double Left { get; set; }
-        public double Top { get; set; }
-    }
+    public class Window3Position { public double Left { get; set; } public double Top { get; set; } }
 }

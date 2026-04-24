@@ -2597,7 +2597,7 @@ namespace WpfApp2
                     {
                         Labels = meta.Labels,
                         LabelsRotation = 0,
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
@@ -2606,7 +2606,7 @@ namespace WpfApp2
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
@@ -2640,7 +2640,7 @@ namespace WpfApp2
                     new Axis
                     {
                         Labels = meta.Labels,
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
                         SeparatorsPaint = null,
                         TicksPaint = null
                     }
@@ -2649,7 +2649,7 @@ namespace WpfApp2
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") },
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
@@ -2681,7 +2681,7 @@ namespace WpfApp2
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = series,
                 LegendPosition = LiveChartsCore.Measure.LegendPosition.Right,
-                LegendTextPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Segoe UI") }
+                LegendTextPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") }
             };
             return chart;
         }

@@ -68,7 +68,7 @@
                             Content="Setting"
                             Width="69" Height="24"
                             HorizontalAlignment="Left"
-                            Margin="921,5,0,3"
+                            Margin="913,5,0,3"
                             Background="{DynamicResource StatusBarBackgroundBrush}"
                             FontWeight="Bold"
                             Foreground="White"
@@ -86,9 +86,9 @@
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="80" Margin="0,0,3,0">
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="80" Margin="-3,0,0,0">
                         <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40"/>
-                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40"/>
+                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40" Padding="1,1,1,1" HorizontalContentAlignment="Center"/>
                     </StackPanel>
                 </Grid>
             </Border>
