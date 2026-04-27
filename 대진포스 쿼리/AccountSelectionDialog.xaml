@@ -1,0 +1,42 @@
+<Window x:Class="대진포스_쿼리.AccountSelectionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="계정 선택" 
+        Height="180" 
+        Width="350"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="SingleBorderWindow">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="20"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" 
+                   Text="자동 로그인할 계정을 선택하세요:" 
+                   FontSize="14"
+                   TextAlignment="Center"
+                   Margin="0,0,0,10"/>
+
+        <StackPanel Grid.Row="2" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Center">
+            <Button Content="junco" 
+                    Width="100" 
+                    Height="40"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Margin="0,0,15,0"
+                    Click="JuncoButton_Click"/>
+            <Button Content="junco3" 
+                    Width="100" 
+                    Height="40"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Margin="15,0,0,0"
+                    Click="Junco3Button_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

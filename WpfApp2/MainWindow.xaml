@@ -52,11 +52,11 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <Border BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
+    <Border x:Name="RootBorder" BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
             Background="{DynamicResource WindowBackgroundBrush}"
             CornerRadius="16">
         <DockPanel>
-            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" Width="1099" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" Background="{DynamicResource WindowBackgroundBrush}">
+            <Border x:Name="상태창" CornerRadius="16,16,0,0" DockPanel.Dock="Top" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" Background="{DynamicResource WindowBackgroundBrush}">
                 <Grid Height="32" Margin="0,0,2,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition/>
@@ -67,8 +67,8 @@
                     <Button x:Name="setbtn"
                             Content="Setting"
                             Width="69" Height="24"
-                            HorizontalAlignment="Left"
-                            Margin="913,5,0,3"
+                            HorizontalAlignment="Right"
+                            Margin="0,5,8,3"
                             Background="{DynamicResource StatusBarBackgroundBrush}"
                             FontWeight="Bold"
                             Foreground="White"
@@ -92,7 +92,7 @@
                     </StackPanel>
                 </Grid>
             </Border>
-            <DockPanel RenderTransformOrigin="0.5,0.5" Width="1100">
+            <DockPanel RenderTransformOrigin="0.5,0.5">
                 <DockPanel.RenderTransform>
                     <TransformGroup>
                         <ScaleTransform ScaleX="1" ScaleY="1"/>
@@ -101,8 +101,8 @@
                         <TranslateTransform/>
                     </TransformGroup>
                 </DockPanel.RenderTransform>
-                <Grid Width="1097">
-                    <TabControl x:Name="tabControl" TabStripPlacement="Left" Height="649" Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource WindowBackgroundBrush}" Margin="0,0,5,0">
+                <Grid>
+                    <TabControl x:Name="tabControl" TabStripPlacement="Left" Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource WindowBackgroundBrush}" Margin="0,0,5,0">
                         <TabControl.Resources>
                             <Style TargetType="{x:Type TabControl}">
                                 <Setter Property="Template">
@@ -198,7 +198,9 @@
                                         <MenuItem Header="차트생성" Click="CreateChartInBorder_Click"/>
                                     </ContextMenu>
                                 </Border.ContextMenu>
-                                <Canvas x:Name="ButtonCanvas1"/>
+                                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                    <Canvas x:Name="ButtonCanvas1" Width="3000" Height="2000"/>
+                                </ScrollViewer>
                             </Border>
                         </TabItem>
                     </TabControl>

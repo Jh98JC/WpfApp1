@@ -3,7 +3,19 @@
     "allow": [
       "Bash(dotnet build *)",
       "Bash(powershell -Command ' *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(cp -r 'C:\\\\Users\\\\jc941\\\\source\\\\repos\\\\대진포스 쿼리\\\\대진포스 쿼리' 'C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\대진포스 쿼리')",
+      "Bash(cp -r 'C:\\\\Users\\\\jc941\\\\source\\\\repos\\\\대진포스 쿼리\\\\packages' 'C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\packages')",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"C:/권지훈/1. 개인자료/Visual Studio/WpfApp1/대진포스 쿼리/대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe\" \"C:/권지훈/1. 개인자료/Visual Studio/WpfApp1/대진포스 쿼리/대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(sqlcmd *)",
+      "Bash(dotnet restore *)",
+      "PowerShell(dotnet build *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\amd64\\\\MSBuild.exe\" \"C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\대진포스 쿼리\\\\대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo /v:minimal 2>&1 | Select-Object -Last 5)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\amd64\\\\MSBuild.exe\" \"C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\대진포스 쿼리\\\\대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo /v:minimal 2>&1 | Where-Object { $_ -match \"error|warning CS|->|오류\" } | Select-Object -Last 15)",
+      "Bash(sqlcmd *)"
     ]
   }
 }

@@ -22,6 +22,7 @@ using System.Collections.ObjectModel;
 using LiveChartsCore.SkiaSharpView.Painting;
 using SkiaSharp;
 using JsonSerializer = System.Text.Json.JsonSerializer;
+using Microsoft.Data.SqlClient;
 
 
 namespace WpfApp2
@@ -79,6 +80,19 @@ namespace WpfApp2
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WINPOINT { public int X; public int Y; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MINMAXINFO
+        {
+            public WINPOINT ptReserved;
+            public WINPOINT ptMaxSize;
+            public WINPOINT ptMaxPosition;
+            public WINPOINT ptMinTrackSize;
+            public WINPOINT ptMaxTrackSize;
+        }
+        private const int WM_GETMINMAXINFO = 0x0024;
         private static System.Drawing.Rectangle GetWindowScreenRect(Window w)
         {
             var hwnd = new WindowInteropHelper(w).Handle;
@@ -102,6 +116,7 @@ namespace WpfApp2
             ThemeManager.ThemeChanged += (_, _) => Dispatcher.Invoke(RefreshAllChartColors);
             tabControl.SelectionChanged += TabControl_SelectionChanged;
             Loaded += MainWindow_Loaded;
+            StateChanged += MainWindow_StateChanged;
 
             this.PreviewKeyDown += MainWindow_PreviewKeyDown; // ESC 처리
             this.MouseLeave += MainWindow_MouseLeave;
@@ -153,6 +168,16 @@ namespace WpfApp2
                     ShowAndActivateMain();
                     handled = true;
                 }
+            }
+            else if (msg == WM_GETMINMAXINFO)
+            {
+                var mmi = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO))!;
+                var screen = Forms.Screen.FromHandle(hwnd);
+                var wa = screen.WorkingArea;
+                mmi.ptMaxPosition = new WINPOINT { X = 0, Y = 0 };
+                mmi.ptMaxSize = new WINPOINT { X = wa.Width, Y = wa.Height };
+                Marshal.StructureToPtr(mmi, lParam, true);
+                handled = true;
             }
             return IntPtr.Zero;
         }
@@ -593,9 +618,13 @@ namespace WpfApp2
         // TitleBar_MouseLeftButtonDown 이벤트 핸들러 추가
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // 드래그 이동만 지원 (최대화 기능 제거)
             if (e.ChangedButton == MouseButton.Left)
             {
+                if (e.ClickCount == 2)
+                {
+                    WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+                    return;
+                }
                 try
                 {
                     this.DragMove();
@@ -604,6 +633,23 @@ namespace WpfApp2
                 {
                     // DragMove 예외 무시 (이미 드래그 중인 경우 등)
                 }
+            }
+        }
+
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            if (RootBorder == null) return;
+            if (WindowState == WindowState.Maximized)
+            {
+                RootBorder.CornerRadius = new CornerRadius(0);
+                상태창.CornerRadius = new CornerRadius(0);
+                RootBorder.BorderThickness = new Thickness(0);
+            }
+            else
+            {
+                RootBorder.CornerRadius = new CornerRadius(16);
+                상태창.CornerRadius = new CornerRadius(16, 16, 0, 0);
+                RootBorder.BorderThickness = new Thickness(1);
             }
         }
 
@@ -1474,7 +1520,7 @@ namespace WpfApp2
                 {
                     Width = state.Width,
                     Height = state.Height,
-                    Content = state.Content ?? "Button",
+                    Content = state.Content ?? "",
                     ContextMenu = new System.Windows.Controls.ContextMenu()
                 };
                 btn.Style = FindResource("DynamicButtonStyle") as Style;
@@ -1904,7 +1950,7 @@ namespace WpfApp2
         private sealed class ChartMeta
         {
             public string ChartType { get; set; } = "Line"; // Line, Bar, Pie, Gauge
-            public string DataSource { get; set; } = "Static"; // Static, Json, Csv, Api
+            public string DataSource { get; set; } = "Static"; // Static, Json, Csv, Api, Db
             public string? DataPath { get; set; } // JSON/CSV 파일 경로 또는 API URL
             public List<double> StaticData { get; set; } = new List<double>();
             public List<string> Labels { get; set; } = new List<string>();
@@ -1913,6 +1959,15 @@ namespace WpfApp2
             public string Title { get; set; } = "";
             public int RefreshInterval { get; set; } = 0; // 0이면 실시간 업데이트 없음, 초 단위
             public DispatcherTimer? RefreshTimer { get; set; }
+            // DB 전용 필드
+            public string? DbStoreName { get; set; }
+            public DateTime? DbStartDate { get; set; }
+            public DateTime? DbEndDate { get; set; }
+            public string DbValueColumn { get; set; } = "총매출액"; // 총매출액, 총수량, 판매수량, 서비스수량
+            public string DbGroupBy { get; set; } = "매장명";       // 매장명, 중분류, 메뉴명
+            public bool DbSortAscending { get; set; } = false;      // false = 내림차순(기본)
+            public string? DbMiddleCategoryFilter { get; set; }     // 중분류 필터
+            public string? DbMenuNameFilter { get; set; }           // 메뉴명 필터
         }
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
@@ -2139,14 +2194,15 @@ namespace WpfApp2
             };
             outer.Children.Add(title);
 
-            var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 2, Columns = 2, HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
+            var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 2, Columns = 3, HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
 
             (string type, string label, string subLabel, UIElement icon)[] charts =
             {
-                ("Line",  "선 그래프",  "Line Chart",  MakeLineIcon()),
-                ("Bar",   "막대 그래프", "Bar Chart",   MakeBarIcon()),
-                ("Pie",   "원형 차트",  "Pie Chart",   MakePieIcon()),
-                ("Gauge", "게이지",    "Gauge",        MakeGaugeIcon()),
+                ("Line",  "선 그래프",    "Line Chart",    MakeLineIcon()),
+                ("Bar",   "세로 막대",    "Column Chart",  MakeBarIcon()),
+                ("HBar",  "가로 막대",    "Bar Chart",     MakeHBarIcon()),
+                ("Pie",   "원형 차트",    "Pie Chart",     MakePieIcon()),
+                ("Gauge", "게이지",       "Gauge",         MakeGaugeIcon()),
             };
 
             string? selectedChartType = null;
@@ -2240,6 +2296,24 @@ namespace WpfApp2
                 };
                 System.Windows.Controls.Canvas.SetLeft(rect, 2 + i * 11);
                 System.Windows.Controls.Canvas.SetTop(rect, 36 - heights[i]);
+                c.Children.Add(rect);
+            }
+            return c;
+        }
+
+        private static UIElement MakeHBarIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 56, Height = 36 };
+            var widths = new[] { 30.0, 46.0, 20.0, 38.0, 14.0 };
+            for (int i = 0; i < widths.Length; i++)
+            {
+                var rect = new System.Windows.Shapes.Rectangle
+                {
+                    Width = widths[i], Height = 5,
+                    Fill = IconStroke, RadiusX = 2, RadiusY = 2
+                };
+                System.Windows.Controls.Canvas.SetLeft(rect, 0);
+                System.Windows.Controls.Canvas.SetTop(rect, 2 + i * 7);
                 c.Children.Add(rect);
             }
             return c;
@@ -2360,6 +2434,7 @@ namespace WpfApp2
             sourceCombo.Items.Add("JSON 파일");
             sourceCombo.Items.Add("CSV 파일");
             sourceCombo.Items.Add("API (실시간)");
+            sourceCombo.Items.Add("DB (대진포스DB)");
             sourceCombo.SelectedIndex = 0;
             stack.Children.Add(sourceCombo);
 
@@ -2397,6 +2472,70 @@ namespace WpfApp2
             pathPanel.Children.Add(browseBtn);
             dataPanel.Children.Add(pathPanel);
 
+            // DB 설정 패널
+            var dbPanel = new System.Windows.Controls.StackPanel { Visibility = Visibility.Collapsed };
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 기준:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbGroupByCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbGroupByCombo.Style = null;
+            dbGroupByCombo.Items.Add("매장명");
+            dbGroupByCombo.Items.Add("중분류");
+            dbGroupByCombo.Items.Add("메뉴명");
+            dbGroupByCombo.SelectedIndex = 0;
+            dbPanel.Children.Add(dbGroupByCombo);
+
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 컬럼:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbValueCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbValueCombo.Style = null;
+            dbValueCombo.Items.Add("총매출액");
+            dbValueCombo.Items.Add("총수량");
+            dbValueCombo.Items.Add("판매수량");
+            dbValueCombo.Items.Add("서비스수량");
+            dbValueCombo.SelectedIndex = 0;
+            dbPanel.Children.Add(dbValueCombo);
+
+            var dbDateRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "시작 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            var dbStartDatePicker = new System.Windows.Controls.DatePicker { Width = 120, Margin = new Thickness(0, 0, 12, 0), SelectedDate = DateTime.Today.AddDays(-7) };
+            dbDateRow.Children.Add(dbStartDatePicker);
+            dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "종료 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            var dbEndDatePicker = new System.Windows.Controls.DatePicker { Width = 120, SelectedDate = DateTime.Today.AddDays(-1) };
+            dbDateRow.Children.Add(dbEndDatePicker);
+            dbPanel.Children.Add(dbDateRow);
+
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "매장명 필터:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbStoreBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbStoreBox.Style = null;
+            dbStoreBox.Items.Add("(전체)");
+            foreach (var v in LoadDbDistinctValues("매장명")) dbStoreBox.Items.Add(v);
+            dbStoreBox.SelectedIndex = 0;
+            dbPanel.Children.Add(dbStoreBox);
+
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "중분류 필터:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbMiddleCatBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbMiddleCatBox.Style = null;
+            dbMiddleCatBox.Items.Add("(전체)");
+            foreach (var v in LoadDbDistinctValues("중분류")) dbMiddleCatBox.Items.Add(v);
+            dbMiddleCatBox.SelectedIndex = 0;
+            dbPanel.Children.Add(dbMiddleCatBox);
+
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "메뉴명 필터:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbMenuBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbMenuBox.Style = null;
+            dbMenuBox.Items.Add("(전체)");
+            foreach (var v in LoadDbDistinctValues("메뉴명")) dbMenuBox.Items.Add(v);
+            dbMenuBox.SelectedIndex = 0;
+            dbPanel.Children.Add(dbMenuBox);
+
+            dbPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "정렬:", Margin = new Thickness(0, 0, 0, 4) });
+            var dbSortCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            dbSortCombo.Style = null;
+            dbSortCombo.Items.Add("내림차순 (높은 값 먼저)");
+            dbSortCombo.Items.Add("오름차순 (낮은 값 먼저)");
+            dbSortCombo.SelectedIndex = 0;
+            dbPanel.Children.Add(dbSortCombo);
+
+            dataPanel.Children.Add(dbPanel);
+
             // 실시간 업데이트 설정
             var refreshPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
             refreshPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "새로고침 간격 (초):", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
@@ -2408,9 +2547,10 @@ namespace WpfApp2
             {
                 int idx = sourceCombo.SelectedIndex;
                 staticDataPanel.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
-                pathPanel.Visibility = idx > 0 ? Visibility.Visible : Visibility.Collapsed;
-                browseBtn.Visibility = idx < 3 ? Visibility.Visible : Visibility.Collapsed;
+                pathPanel.Visibility = (idx >= 1 && idx <= 3) ? Visibility.Visible : Visibility.Collapsed;
+                browseBtn.Visibility = (idx >= 1 && idx <= 2) ? Visibility.Visible : Visibility.Collapsed;
                 refreshPanel.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
+                dbPanel.Visibility = idx == 4 ? Visibility.Visible : Visibility.Collapsed;
             };
 
             // 버튼
@@ -2455,6 +2595,22 @@ namespace WpfApp2
                             if (int.TryParse(refreshBox.Text, out int interval))
                                 meta.RefreshInterval = interval;
                             break;
+                        case 4: // DB
+                            meta.DataSource = "Db";
+                            meta.DbGroupBy = dbGroupByCombo.SelectedItem?.ToString() ?? "매장명";
+                            meta.DbValueColumn = dbValueCombo.SelectedItem?.ToString() ?? "총매출액";
+                            meta.DbStartDate = dbStartDatePicker.SelectedDate;
+                            meta.DbEndDate = dbEndDatePicker.SelectedDate;
+                            meta.DbStoreName = dbStoreBox.SelectedIndex <= 0 ? null : dbStoreBox.SelectedItem?.ToString();
+                            meta.DbMiddleCategoryFilter = dbMiddleCatBox.SelectedIndex <= 0 ? null : dbMiddleCatBox.SelectedItem?.ToString();
+                            meta.DbMenuNameFilter = dbMenuBox.SelectedIndex <= 0 ? null : dbMenuBox.SelectedItem?.ToString();
+                            meta.DbSortAscending = dbSortCombo.SelectedIndex == 1;
+                            break;
+                    }
+
+                    if (meta.DataSource == "Db")
+                    {
+                        try { LoadDbData(meta); } catch { }
                     }
 
                     CreateChartControl(canvas, meta);
@@ -2498,6 +2654,9 @@ namespace WpfApp2
                     break;
                 case "Bar":
                     chartControl = CreateBarChart(meta);
+                    break;
+                case "HBar":
+                    chartControl = CreateHBarChart(meta);
                     break;
                 case "Pie":
                     chartControl = CreatePieChart(meta);
@@ -2593,13 +2752,62 @@ namespace WpfApp2
         private static readonly SKColor P_Rust   = SKColor.Parse("#C0614A");
         private static readonly SKColor P_Sage   = SKColor.Parse("#4F8C5E");
 
+        private static void AttachCtrlScrollZoom(CartesianChart chart)
+        {
+            chart.ZoomMode = LiveChartsCore.Measure.ZoomAndPanMode.None;
+            chart.PreviewMouseWheel += (s, e) =>
+            {
+                e.Handled = true; // 항상 캡처 → ScrollViewer로 절대 안 넘어감
+
+                bool ctrl = Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl);
+                if (!ctrl)
+                {
+                    // 일반 휠 → 부모 ScrollViewer 스크롤
+                    DependencyObject p = VisualTreeHelper.GetParent(chart);
+                    while (p != null && p is not System.Windows.Controls.ScrollViewer)
+                        p = VisualTreeHelper.GetParent(p);
+                    if (p is System.Windows.Controls.ScrollViewer sv)
+                        sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta / 3.0);
+                    return;
+                }
+
+                // Ctrl+휠 → 축 범위 수동 조정
+                double factor = e.Delta > 0 ? 0.8 : 1.25;
+                try
+                {
+                    foreach (var axis in chart.XAxes.OfType<Axis>())
+                    {
+                        double lo = axis.MinLimit ?? (axis.DataBounds.Min - 0.5);
+                        double hi = axis.MaxLimit ?? (axis.DataBounds.Max + 0.5);
+                        double c = (lo + hi) / 2;
+                        double h = (hi - lo) / 2 * factor;
+                        axis.MinLimit = c - h;
+                        axis.MaxLimit = c + h;
+                    }
+                    foreach (var axis in chart.YAxes.OfType<Axis>())
+                    {
+                        double lo = axis.MinLimit ?? 0;
+                        double hi = axis.MaxLimit ?? (axis.DataBounds.Max * 1.15);
+                        double c = (lo + hi) / 2;
+                        double h = (hi - lo) / 2 * factor;
+                        double newLo = c - h;
+                        axis.MinLimit = newLo < 0 ? 0 : newLo;
+                        axis.MaxLimit = c + h;
+                    }
+                }
+                catch { }
+            };
+        }
+
         private CartesianChart CreateLineChart(ChartMeta meta)
         {
             var (_, axisLabel, gridLine) = GetChartColors();
             var lineColor = P_Blue;
             var chart = new CartesianChart
             {
-                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
                 Series = new ISeries[]
                 {
                     new LineSeries<double>
@@ -2609,8 +2817,14 @@ namespace WpfApp2
                         Fill = new LinearGradientPaint(
                             new[] { lineColor.WithAlpha(55), lineColor.WithAlpha(0) },
                             new SKPoint(0, 0), new SKPoint(0, 1)),
-                        GeometrySize = 0,
-                        LineSmoothness = 0.65
+                        GeometrySize = 6,
+                        GeometryFill = new SolidColorPaint(lineColor),
+                        GeometryStroke = null,
+                        LineSmoothness = 0.65,
+                        DataLabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        DataLabelsSize = 10,
+                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
+                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
                     }
                 },
                 XAxes = new[]
@@ -2634,6 +2848,7 @@ namespace WpfApp2
                     }
                 }
             };
+            AttachCtrlScrollZoom(chart);
             return chart;
         }
 
@@ -2642,7 +2857,9 @@ namespace WpfApp2
             var (_, axisLabel, gridLine) = GetChartColors();
             var chart = new CartesianChart
             {
-                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
                 Series = new ISeries[]
                 {
                     new ColumnSeries<double>
@@ -2654,7 +2871,11 @@ namespace WpfApp2
                         Stroke = null,
                         Rx = 3,
                         Ry = 3,
-                        MaxBarWidth = 28
+                        MaxBarWidth = double.PositiveInfinity,
+                        DataLabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        DataLabelsSize = 10,
+                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
+                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
                     }
                 },
                 XAxes = new[]
@@ -2677,6 +2898,66 @@ namespace WpfApp2
                     }
                 }
             };
+            AttachCtrlScrollZoom(chart);
+            return chart;
+        }
+
+        private CartesianChart CreateHBarChart(ChartMeta meta)
+        {
+            var (_, axisLabel, gridLine) = GetChartColors();
+
+            // LiveCharts2 RowSeries는 index 0이 맨 아래 → 역순으로 넣어야 높은 값이 위에 표시됨
+            var displayValues = meta.StaticData.AsEnumerable().Reverse().ToList();
+            var displayLabels = meta.Labels.AsEnumerable().Reverse().ToList();
+
+            var labelPaint = new SolidColorPaint(new SKColor(240, 240, 240))
+                { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") };
+
+            var chart = new CartesianChart
+            {
+                TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
+                Series = new ISeries[]
+                {
+                    new RowSeries<double>
+                    {
+                        Values = displayValues,
+                        Fill = new LinearGradientPaint(
+                            new[] { P_Teal.WithAlpha(220), P_Blue.WithAlpha(200) },
+                            new SKPoint(0, 0), new SKPoint(1, 0)),
+                        Stroke = null,
+                        Rx = 3,
+                        Ry = 3,
+                        MaxBarWidth = 40,
+                        DataLabelsPaint = labelPaint,
+                        DataLabelsSize = 10,
+                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Middle,
+                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
+                    }
+                },
+                YAxes = new[]
+                {
+                    new Axis
+                    {
+                        Labels = displayLabels,
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        SeparatorsPaint = null,
+                        TicksPaint = null,
+                        TextSize = 11
+                    }
+                },
+                XAxes = new[]
+                {
+                    new Axis
+                    {
+                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
+                        TicksPaint = null
+                    }
+                }
+            };
+            AttachCtrlScrollZoom(chart);
             return chart;
         }
 
@@ -2761,6 +3042,7 @@ namespace WpfApp2
                         {
                             "Line"  => CreateLineChart(meta),
                             "Bar"   => CreateBarChart(meta),
+                            "HBar"  => CreateHBarChart(meta),
                             "Pie"   => CreatePieChart(meta),
                             "Gauge" => CreateGaugeChart(meta),
                             _       => null
@@ -2896,6 +3178,7 @@ namespace WpfApp2
                     {
                         case "Line": newChart = CreateLineChart(meta); break;
                         case "Bar": newChart = CreateBarChart(meta); break;
+                        case "HBar": newChart = CreateHBarChart(meta); break;
                         case "Pie": newChart = CreatePieChart(meta); break;
                         case "Gauge": newChart = CreateGaugeChart(meta); break;
                     }
@@ -2907,6 +3190,113 @@ namespace WpfApp2
                 };
                 cancelBtn.Click += (s, ev) => configDlg.Close();
 
+                btnPanel.Children.Add(applyBtn);
+                btnPanel.Children.Add(cancelBtn);
+                stack.Children.Add(btnPanel);
+            }
+            else if (meta.DataSource == "Db")
+            {
+                // 집계 기준
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 기준:", Margin = new Thickness(0, 0, 0, 4) });
+                var eGroupByCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+                eGroupByCombo.Style = null;
+                eGroupByCombo.Items.Add("매장명"); eGroupByCombo.Items.Add("중분류"); eGroupByCombo.Items.Add("메뉴명");
+                eGroupByCombo.SelectedItem = meta.DbGroupBy ?? "매장명";
+                stack.Children.Add(eGroupByCombo);
+
+                // 집계 컬럼
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 컬럼:", Margin = new Thickness(0, 0, 0, 4) });
+                var eValueCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+                eValueCombo.Style = null;
+                eValueCombo.Items.Add("총매출액"); eValueCombo.Items.Add("총수량"); eValueCombo.Items.Add("판매수량"); eValueCombo.Items.Add("서비스수량");
+                eValueCombo.SelectedItem = meta.DbValueColumn ?? "총매출액";
+                stack.Children.Add(eValueCombo);
+
+                // 날짜
+                var eDateRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+                eDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "시작:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+                var eStartDate = new System.Windows.Controls.DatePicker { Width = 110, Margin = new Thickness(0, 0, 10, 0), SelectedDate = meta.DbStartDate ?? DateTime.Today.AddDays(-7) };
+                eDateRow.Children.Add(eStartDate);
+                eDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "종료:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+                var eEndDate = new System.Windows.Controls.DatePicker { Width = 110, SelectedDate = meta.DbEndDate ?? DateTime.Today.AddDays(-1) };
+                eDateRow.Children.Add(eEndDate);
+                stack.Children.Add(eDateRow);
+
+                // 필터들 (ComboBox - DB에서 값 가져옴)
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "매장명 필터:", Margin = new Thickness(0, 0, 0, 4) });
+                var eStoreBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+                eStoreBox.Style = null;
+                eStoreBox.Items.Add("(전체)");
+                foreach (var v in LoadDbDistinctValues("매장명")) eStoreBox.Items.Add(v);
+                eStoreBox.SelectedItem = meta.DbStoreName ?? "(전체)";
+                if (eStoreBox.SelectedIndex < 0) eStoreBox.SelectedIndex = 0;
+                stack.Children.Add(eStoreBox);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "중분류 필터:", Margin = new Thickness(0, 0, 0, 4) });
+                var eMiddleCatBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+                eMiddleCatBox.Style = null;
+                eMiddleCatBox.Items.Add("(전체)");
+                foreach (var v in LoadDbDistinctValues("중분류")) eMiddleCatBox.Items.Add(v);
+                eMiddleCatBox.SelectedItem = meta.DbMiddleCategoryFilter ?? "(전체)";
+                if (eMiddleCatBox.SelectedIndex < 0) eMiddleCatBox.SelectedIndex = 0;
+                stack.Children.Add(eMiddleCatBox);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "메뉴명 필터:", Margin = new Thickness(0, 0, 0, 4) });
+                var eMenuBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+                eMenuBox.Style = null;
+                eMenuBox.Items.Add("(전체)");
+                foreach (var v in LoadDbDistinctValues("메뉴명")) eMenuBox.Items.Add(v);
+                eMenuBox.SelectedItem = meta.DbMenuNameFilter ?? "(전체)";
+                if (eMenuBox.SelectedIndex < 0) eMenuBox.SelectedIndex = 0;
+                stack.Children.Add(eMenuBox);
+
+                // 정렬
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "정렬:", Margin = new Thickness(0, 0, 0, 4) });
+                var eSortCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+                eSortCombo.Style = null;
+                eSortCombo.Items.Add("내림차순 (높은 값 먼저)");
+                eSortCombo.Items.Add("오름차순 (낮은 값 먼저)");
+                eSortCombo.SelectedIndex = meta.DbSortAscending ? 1 : 0;
+                stack.Children.Add(eSortCombo);
+
+                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+                var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
+                var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+
+                applyBtn.Click += (s, ev) =>
+                {
+                    meta.Width = double.Parse(widthBox.Text);
+                    meta.Height = double.Parse(heightBox.Text);
+                    meta.DbGroupBy = eGroupByCombo.SelectedItem?.ToString() ?? "매장명";
+                    meta.DbValueColumn = eValueCombo.SelectedItem?.ToString() ?? "총매출액";
+                    meta.DbStartDate = eStartDate.SelectedDate;
+                    meta.DbEndDate = eEndDate.SelectedDate;
+                    meta.DbStoreName = eStoreBox.SelectedIndex <= 0 ? null : eStoreBox.SelectedItem?.ToString();
+                    meta.DbMiddleCategoryFilter = eMiddleCatBox.SelectedIndex <= 0 ? null : eMiddleCatBox.SelectedItem?.ToString();
+                    meta.DbMenuNameFilter = eMenuBox.SelectedIndex <= 0 ? null : eMenuBox.SelectedItem?.ToString();
+                    meta.DbSortAscending = eSortCombo.SelectedIndex == 1;
+
+                    border.Width = meta.Width;
+                    border.Height = meta.Height;
+
+                    try { LoadDbData(meta); } catch { }
+
+                    FrameworkElement newChart = null;
+                    switch (meta.ChartType)
+                    {
+                        case "Line": newChart = CreateLineChart(meta); break;
+                        case "Bar": newChart = CreateBarChart(meta); break;
+                        case "HBar": newChart = CreateHBarChart(meta); break;
+                        case "Pie": newChart = CreatePieChart(meta); break;
+                        case "Gauge": newChart = CreateGaugeChart(meta); break;
+                    }
+                    if (newChart != null)
+                        border.Child = newChart;
+
+                    SaveAllChartStates();
+                    configDlg.Close();
+                };
+                cancelBtn.Click += (s, ev) => configDlg.Close();
                 btnPanel.Children.Add(applyBtn);
                 btnPanel.Children.Add(cancelBtn);
                 stack.Children.Add(btnPanel);
@@ -2939,6 +3329,9 @@ namespace WpfApp2
                     case "Api":
                         await LoadApiData(meta);
                         break;
+                    case "Db":
+                        LoadDbData(meta);
+                        break;
                 }
 
                 // 차트 다시 생성
@@ -2947,6 +3340,7 @@ namespace WpfApp2
                 {
                     case "Line": newChart = CreateLineChart(meta); break;
                     case "Bar": newChart = CreateBarChart(meta); break;
+                    case "HBar": newChart = CreateHBarChart(meta); break;
                     case "Pie": newChart = CreatePieChart(meta); break;
                     case "Gauge": newChart = CreateGaugeChart(meta); break;
                 }
@@ -3032,6 +3426,66 @@ namespace WpfApp2
             }
         }
 
+        private List<string> LoadDbDistinctValues(string column)
+        {
+            var result = new List<string>();
+            try
+            {
+                const string cs = "Server=localhost\\SQLEXPRESS;Database=대진포스DB;Integrated Security=True;TrustServerCertificate=True;";
+                using var conn = new SqlConnection(cs);
+                conn.Open();
+                using var cmd = new SqlCommand($"SELECT DISTINCT [{column}] FROM 매출데이터 WHERE [{column}] IS NOT NULL AND [{column}] <> '' ORDER BY [{column}]", conn);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read()) result.Add(reader.GetString(0));
+            }
+            catch { }
+            return result;
+        }
+
+        private void LoadDbData(ChartMeta meta)
+        {
+            const string cs = "Server=localhost\\SQLEXPRESS;Database=대진포스DB;Integrated Security=True;TrustServerCertificate=True;";
+            var groupBy = meta.DbGroupBy ?? "매장명";
+            var valueCol = meta.DbValueColumn ?? "총매출액";
+            var start = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+            var end = meta.DbEndDate ?? DateTime.Today.AddDays(-1);
+            var sortDir = meta.DbSortAscending ? "ASC" : "DESC";
+
+            var sql = $@"
+SELECT TOP 50 [{groupBy}], SUM([{valueCol}]) AS 값
+FROM 매출데이터
+WHERE 날짜 BETWEEN @start AND @end
+  AND (@store IS NULL OR 매장명 = @store)
+  AND (@middleCat IS NULL OR 중분류 = @middleCat)
+  AND (@menuName IS NULL OR 메뉴명 = @menuName)
+  AND [{groupBy}] IS NOT NULL AND [{groupBy}] <> ''
+GROUP BY [{groupBy}]
+ORDER BY 값 {sortDir}";
+
+            var labels = new List<string>();
+            var values = new List<double>();
+
+            using (var conn = new SqlConnection(cs))
+            {
+                conn.Open();
+                using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@start", start.Date);
+                cmd.Parameters.AddWithValue("@end", end.Date);
+                cmd.Parameters.AddWithValue("@store", (object?)meta.DbStoreName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@middleCat", (object?)meta.DbMiddleCategoryFilter ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@menuName", (object?)meta.DbMenuNameFilter ?? DBNull.Value);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    labels.Add(reader.IsDBNull(0) ? "" : reader.GetString(0));
+                    values.Add(reader.IsDBNull(1) ? 0 : Convert.ToDouble(reader.GetValue(1)));
+                }
+            }
+
+            meta.Labels = labels;
+            meta.StaticData = values;
+        }
+
         private void SaveAllChartStates()
         {
             // 차트 상태 저장 로직 (버튼 상태 저장과 유사)
@@ -3059,7 +3513,15 @@ namespace WpfApp2
                             Width = meta.Width,
                             Height = meta.Height,
                             Title = meta.Title,
-                            RefreshInterval = meta.RefreshInterval
+                            RefreshInterval = meta.RefreshInterval,
+                            DbStoreName = meta.DbStoreName,
+                            DbStartDate = meta.DbStartDate,
+                            DbEndDate = meta.DbEndDate,
+                            DbValueColumn = meta.DbValueColumn,
+                            DbGroupBy = meta.DbGroupBy,
+                            DbSortAscending = meta.DbSortAscending,
+                            DbMiddleCategoryFilter = meta.DbMiddleCategoryFilter,
+                            DbMenuNameFilter = meta.DbMenuNameFilter
                         };
                         allCharts.Add(chartData);
                     }
@@ -3095,7 +3557,17 @@ namespace WpfApp2
                         Width = Convert.ToDouble(chartData["Width"]),
                         Height = Convert.ToDouble(chartData["Height"]),
                         Title = chartData.ContainsKey("Title") ? chartData["Title"]?.ToString() ?? "" : "",
-                        RefreshInterval = chartData.ContainsKey("RefreshInterval") ? Convert.ToInt32(chartData["RefreshInterval"]) : 0
+                        RefreshInterval = chartData.ContainsKey("RefreshInterval") ? Convert.ToInt32(chartData["RefreshInterval"]) : 0,
+                        DbStoreName = chartData.ContainsKey("DbStoreName") ? chartData["DbStoreName"]?.ToString() : null,
+                        DbStartDate = chartData.ContainsKey("DbStartDate") && chartData["DbStartDate"] != null
+                            ? DateTime.TryParse(chartData["DbStartDate"].ToString(), out var ds) ? ds : (DateTime?)null : null,
+                        DbEndDate = chartData.ContainsKey("DbEndDate") && chartData["DbEndDate"] != null
+                            ? DateTime.TryParse(chartData["DbEndDate"].ToString(), out var de) ? de : (DateTime?)null : null,
+                        DbValueColumn = chartData.ContainsKey("DbValueColumn") ? chartData["DbValueColumn"]?.ToString() ?? "총매출액" : "총매출액",
+                        DbGroupBy = chartData.ContainsKey("DbGroupBy") ? chartData["DbGroupBy"]?.ToString() ?? "매장명" : "매장명",
+                        DbSortAscending = chartData.ContainsKey("DbSortAscending") && Convert.ToBoolean(chartData["DbSortAscending"]),
+                        DbMiddleCategoryFilter = chartData.ContainsKey("DbMiddleCategoryFilter") ? chartData["DbMiddleCategoryFilter"]?.ToString() : null,
+                        DbMenuNameFilter = chartData.ContainsKey("DbMenuNameFilter") ? chartData["DbMenuNameFilter"]?.ToString() : null
                     };
 
                     // StaticData 복원
@@ -3139,6 +3611,9 @@ namespace WpfApp2
                             break;
                         case "Bar":
                             chartControl = CreateBarChart(meta);
+                            break;
+                        case "HBar":
+                            chartControl = CreateHBarChart(meta);
                             break;
                         case "Pie":
                             chartControl = CreatePieChart(meta);
@@ -3215,9 +3690,11 @@ namespace WpfApp2
         {
             if (sender is MenuItem menuItem &&
                 menuItem.Parent is ContextMenu cm &&
-                cm.PlacementTarget is Border b &&
-                b.Child is Canvas c)
-                return c;
+                cm.PlacementTarget is Border b)
+            {
+                if (b.Child is Canvas c) return c;
+                if (b.Child is System.Windows.Controls.ScrollViewer sv && sv.Content is Canvas sc) return sc;
+            }
             return null;
         }
 
@@ -3317,7 +3794,7 @@ namespace WpfApp2
                         break;
                     case System.Windows.Controls.ComboBox cb:
                         cb.Background = buttonBg;
-                        cb.Foreground = fgBrush;
+                        cb.Foreground = System.Windows.Media.Brushes.Black;
                         cb.BorderThickness = new System.Windows.Thickness(0);
                         break;
                     case System.Windows.Controls.ListBox lb:
@@ -3484,7 +3961,8 @@ namespace WpfApp2
                 Title = "버튼/이미지 크기 및 위치 조정",
                 WindowStartupLocation = this.IsVisible ? System.Windows.WindowStartupLocation.CenterOwner : System.Windows.WindowStartupLocation.CenterScreen,
                 ResizeMode = System.Windows.ResizeMode.NoResize,
-                SizeToContent = SizeToContent.WidthAndHeight
+                SizeToContent = SizeToContent.WidthAndHeight,
+                MinWidth = 620
             };
             if (this.IsVisible) sizeDlg.Owner = this;
             sizeDlg.Topmost = true;
@@ -3728,15 +4206,34 @@ namespace WpfApp2
 
             rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "글꼴", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 4, 0, 4) });
             var fontRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            var darkComboBg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50));
+            var darkComboHover = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(75, 75, 75));
             var fontCombo = new System.Windows.Controls.ComboBox
             {
                 IsEditable = true,
-                Width = 160,
+                Width = 180,
                 Style = null,
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50)),
+                Background = darkComboBg,
                 Foreground = System.Windows.Media.Brushes.White,
                 BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(90, 90, 90))
             };
+            // 드롭다운 팝업 배경색 다크 테마 적용
+            fontCombo.Resources[System.Windows.SystemColors.WindowBrushKey] = darkComboBg;
+            fontCombo.Resources[System.Windows.SystemColors.WindowTextBrushKey] = System.Windows.Media.Brushes.White;
+            fontCombo.Resources[System.Windows.SystemColors.HighlightBrushKey] = darkComboHover;
+            fontCombo.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = System.Windows.Media.Brushes.White;
+            // 각 아이템 스타일: 어두운 배경 + 흰 글자
+            var comboItemStyle = new Style(typeof(System.Windows.Controls.ComboBoxItem));
+            comboItemStyle.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.BackgroundProperty, darkComboBg));
+            comboItemStyle.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.ForegroundProperty, System.Windows.Media.Brushes.White));
+            comboItemStyle.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.PaddingProperty, new Thickness(6, 3, 6, 3)));
+            var hoverTrigger = new Trigger { Property = System.Windows.Controls.ComboBoxItem.IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.BackgroundProperty, darkComboHover));
+            comboItemStyle.Triggers.Add(hoverTrigger);
+            var selectedTrigger = new Trigger { Property = System.Windows.Controls.ComboBoxItem.IsSelectedProperty, Value = true };
+            selectedTrigger.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.BackgroundProperty, darkComboHover));
+            comboItemStyle.Triggers.Add(selectedTrigger);
+            fontCombo.ItemContainerStyle = comboItemStyle;
             string[] preferredFonts = { "Malgun Gothic", "맑은 고딕", "Gulim", "굴림", "Dotum", "돋움", "Batang", "바탕", "Segoe UI", "Arial", "Tahoma", "Consolas" };
             foreach (var f in preferredFonts) fontCombo.Items.Add(f);
             fontCombo.Text = selectedFontFamily ?? "";
@@ -3973,9 +4470,15 @@ namespace WpfApp2
             border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
 
             // Canvas 추가
-            var canvas = new Canvas { Name = $"ButtonCanvas{_nextTabNumber}" };
+            var canvas = new Canvas { Name = $"ButtonCanvas{_nextTabNumber}", Width = 3000, Height = 2000 };
             RegisterName(canvas.Name, canvas);
-            border.Child = canvas;
+            var scrollViewer = new System.Windows.Controls.ScrollViewer
+            {
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                Content = canvas
+            };
+            border.Child = scrollViewer;
 
             newTabItem.Content = border;
             tabControl.Items.Add(newTabItem);
@@ -4124,9 +4627,15 @@ namespace WpfApp2
                     border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
 
                     // Canvas 추가 - state.TabIndex에 맞는 Canvas 이름 사용
-                    var canvas = new Canvas { Name = $"ButtonCanvas{state.TabIndex + 1}" };
+                    var canvas = new Canvas { Name = $"ButtonCanvas{state.TabIndex + 1}", Width = 3000, Height = 2000 };
                     RegisterName(canvas.Name, canvas);
-                    border.Child = canvas;
+                    var scrollViewer = new System.Windows.Controls.ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                        Content = canvas
+                    };
+                    border.Child = scrollViewer;
 
                     newTabItem.Content = border;
                     tabControl.Items.Add(newTabItem);
