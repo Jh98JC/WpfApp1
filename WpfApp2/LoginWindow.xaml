@@ -1,0 +1,177 @@
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Class="WpfApp2.LoginWindow"
+    Title="로그인" Width="340"
+    SizeToContent="Height"
+    Background="Transparent"
+    WindowStyle="None" AllowsTransparency="True"
+    ResizeMode="NoResize"
+    WindowStartupLocation="CenterScreen"
+    PreviewKeyDown="Window_PreviewKeyDown">
+    <Border BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
+            Background="{DynamicResource WindowBackgroundBrush}"
+            CornerRadius="16">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" CornerRadius="16,16,0,0"
+                    Background="{DynamicResource WindowBackgroundBrush}"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid Height="40">
+                    <TextBlock Text="로그인" FontWeight="Bold" FontSize="15"
+                               VerticalAlignment="Center" Margin="20,0,0,0"
+                               Foreground="{DynamicResource ForegroundBrush}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,8,0">
+                        <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}"
+                                Click="Close_Click" Width="32" Height="32"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <StackPanel Margin="28,18,28,24">
+                <!-- 사용자명 -->
+                <TextBlock Text="사용자명" FontSize="13"
+                           Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,5"/>
+                <TextBox x:Name="UsernameBox" Height="38" FontSize="13"
+                         Background="{DynamicResource ContextMenuBorderBrush}"
+                         Foreground="{DynamicResource ForegroundBrush}"
+                         BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                         Padding="10,0" VerticalContentAlignment="Center" Margin="0,0,0,14"
+                         Style="{x:Null}"/>
+
+                <!-- 비밀번호 -->
+                <TextBlock Text="비밀번호" FontSize="13"
+                           Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,5"/>
+                <Grid Margin="0,0,0,10">
+                    <PasswordBox x:Name="PasswordBox" Height="38" FontSize="13"
+                                 Background="{DynamicResource ContextMenuBorderBrush}"
+                                 Foreground="{DynamicResource ForegroundBrush}"
+                                 BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                                 Padding="10,0,42,0" VerticalContentAlignment="Center"/>
+                    <TextBox x:Name="PasswordTextBox" Height="38" FontSize="13"
+                             Background="{DynamicResource ContextMenuBorderBrush}"
+                             Foreground="{DynamicResource ForegroundBrush}"
+                             BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                             Padding="10,0,42,0" VerticalContentAlignment="Center"
+                             Visibility="Collapsed" Style="{x:Null}"/>
+                    <!-- 비밀번호 표시 토글 -->
+                    <Button x:Name="ShowPwBtn" Width="34" Height="34"
+                            HorizontalAlignment="Right" Margin="0,0,2,0"
+                            Background="Transparent" BorderThickness="0"
+                            Cursor="Hand" Click="ShowPwBtn_Click"
+                            ToolTip="비밀번호 표시/숨기기">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="Transparent" CornerRadius="6">
+                                    <TextBlock x:Name="EyeText" Text="👁" FontSize="15"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Opacity="0.5"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="EyeText" Property="Opacity" Value="1"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+
+                <!-- Caps Lock 경고 -->
+                <TextBlock x:Name="CapsLockText" Text="⚠ Caps Lock 켜짐"
+                           FontSize="13" Foreground="#FFB300"
+                           Margin="0,-6,0,10" Visibility="Hidden"/>
+
+                <!-- 자동 로그인 -->
+                <CheckBox x:Name="AutoLoginCheck" Content="자동 로그인"
+                          FontSize="13" Margin="0,0,0,18"
+                          Foreground="{DynamicResource ForegroundBrush}">
+                    <CheckBox.Template>
+                        <ControlTemplate TargetType="CheckBox">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="Box" Width="18" Height="18" CornerRadius="4"
+                                        BorderThickness="1.5"
+                                        BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                                        Background="{DynamicResource ContextMenuBorderBrush}">
+                                    <TextBlock x:Name="Check" Text="✓" FontSize="13" FontWeight="Bold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource StatusBarBorderBrush}"
+                                               Visibility="Collapsed" Margin="0,-1,0,0"/>
+                                </Border>
+                                <ContentPresenter Margin="7,0,0,0" VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True"/>
+                            </StackPanel>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                                    <Setter TargetName="Check" Property="Foreground" Value="White"/>
+                                    <Setter TargetName="Box" Property="Background" Value="#4CAF50"/>
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="#4CAF50"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource ForegroundBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </CheckBox.Template>
+                </CheckBox>
+
+                <!-- 로그인 버튼 -->
+                <Button x:Name="LoginBtn" Content="로그인" Height="42" FontSize="14" FontWeight="Bold"
+                        Background="{DynamicResource StatusBarBackgroundBrush}"
+                        Foreground="White"
+                        BorderBrush="{DynamicResource StatusBarBackgroundBrush}"
+                        Margin="0,0,0,10" Click="LoginBtn_Click">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1" CornerRadius="8">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.7"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+
+                <!-- 회원가입 신청 버튼 -->
+                <Button x:Name="RegisterBtn" Content="회원가입 신청" Height="36" FontSize="13"
+                        Background="Transparent"
+                        Foreground="{DynamicResource TabTextNormalBrush}"
+                        BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                        BorderThickness="1"
+                        Click="RegisterBtn_Click">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="8">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ContextMenuBorderBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+
+                <TextBlock x:Name="StatusText" Text="" FontSize="13" TextAlignment="Center"
+                           Foreground="#FF5A5A" Margin="0,12,0,0" TextWrapping="Wrap"/>
+
+                <!-- DB 설정: Ctrl+Shift+D 단축키로만 접근 가능 -->
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</Window>

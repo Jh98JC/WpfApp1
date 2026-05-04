@@ -46,12 +46,116 @@ namespace 대진포스_쿼리
             InitializeComponent();
             _scraper = new WebScraper();
 
-            // 🔍 디버그 로그 파일 초기화 (주석처리 - 필요시에만 활성화)
-            // string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            // _debugLogPath = System.IO.Path.Combine(desktopPath, $"POS_Debug_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-            // File.WriteAllText(_debugLogPath, $"=== 대진포스 디버그 로그 시작 ===\n시작 시간: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n");
+            DbSaver.LoadConfig();
+            if (!DbSaver.IsConfigured)
+                StatusText.Text = "⚠️ Azure DB 연결 문자열을 설정하세요 (⚙️ DB 설정 버튼)";
 
             InitializeWebView();
+        }
+
+        private void DbSettingsButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Window
+            {
+                Title = "Azure DB 연결 설정",
+                Width = 520,
+                Height = 260,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = ResizeMode.NoResize
+            };
+
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "Azure SQL 연결 문자열",
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 13,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            var csBox = new System.Windows.Controls.TextBox
+            {
+                Text = DbSaver.ConnectionString,
+                Height = 80,
+                AcceptsReturn = false,
+                TextWrapping = TextWrapping.Wrap,
+                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                FontSize = 11,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                Padding = new Thickness(6),
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            panel.Children.Add(csBox);
+
+            var statusText = new System.Windows.Controls.TextBlock
+            {
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 8),
+                TextWrapping = TextWrapping.Wrap
+            };
+            panel.Children.Add(statusText);
+
+            var btnPanel = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var testBtn = new System.Windows.Controls.Button
+            {
+                Content = "연결 테스트",
+                Width = 100,
+                Height = 32,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            testBtn.Click += (s, ev) =>
+            {
+                string cs = csBox.Text.Trim();
+                if (string.IsNullOrWhiteSpace(cs)) { statusText.Text = "연결 문자열을 입력하세요."; return; }
+                testBtn.IsEnabled = false;
+                statusText.Text = "연결 확인 중...";
+                try
+                {
+                    using (var conn = new System.Data.SqlClient.SqlConnection(cs))
+                        conn.Open();
+                    statusText.Foreground = System.Windows.Media.Brushes.Green;
+                    statusText.Text = "✅ 연결 성공!";
+                }
+                catch (Exception ex)
+                {
+                    statusText.Foreground = System.Windows.Media.Brushes.Red;
+                    statusText.Text = $"❌ 연결 실패: {ex.Message}";
+                }
+                finally { testBtn.IsEnabled = true; }
+            };
+            btnPanel.Children.Add(testBtn);
+
+            var saveBtn = new System.Windows.Controls.Button
+            {
+                Content = "저장",
+                Width = 80,
+                Height = 32,
+                Background = System.Windows.Media.Brushes.SteelBlue,
+                Foreground = System.Windows.Media.Brushes.White,
+                FontWeight = FontWeights.Bold
+            };
+            saveBtn.Click += (s, ev) =>
+            {
+                string cs = csBox.Text.Trim();
+                if (string.IsNullOrWhiteSpace(cs)) { statusText.Text = "연결 문자열을 입력하세요."; return; }
+                DbSaver.SaveConfig(cs);
+                statusText.Foreground = System.Windows.Media.Brushes.Green;
+                statusText.Text = "✅ 저장 완료!";
+                if (!DbSaver.IsConfigured) return;
+                StatusText.Text = "준비";
+            };
+            btnPanel.Children.Add(saveBtn);
+            panel.Children.Add(btnPanel);
+
+            dialog.Content = panel;
+            dialog.ShowDialog();
         }
 
         private async void InitializeWebView()

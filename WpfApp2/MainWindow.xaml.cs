@@ -347,7 +347,129 @@ namespace WpfApp2
             }
         }
 
+        public void DoLogout()
+        {
+            // 열린 자식 창 모두 닫기
+            foreach (Window win in System.Windows.Application.Current.Windows.Cast<Window>().ToList())
+            {
+                if (win != this) win.Close();
+            }
+
+            Hide();
+
+            var loginWin = new LoginWindow { WindowStartupLocation = WindowStartupLocation.CenterScreen };
+            if (loginWin.ShowDialog() == true)
+            {
+                ApplyRoleVisibility();
+                Show();
+                Activate();
+            }
+            else
+            {
+                System.Windows.Application.Current.Shutdown();
+            }
+        }
+
+        public void ApplyRoleVisibility()
+        {
+            bool isMaster = Session.IsMaster;
+            personalbtn.Visibility = isMaster ? Visibility.Visible : Visibility.Collapsed;
+            adminbtn.Visibility = isMaster ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void adminbtn_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (Window win in System.Windows.Application.Current.Windows)
+            {
+                if (win is AdminWindow existing)
+                {
+                    existing.Activate();
+                    return;
+                }
+            }
+            var adminWin = new AdminWindow { Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            adminWin.Show();
+        }
+
         // setbtn_Click 이벤트 핸들러에서 Window1을 올바르게 생성하고 표시
+        // ── Window3 ↔ MainWindow 전환 애니메이션 ─────────────────────────────
+        private static readonly Duration _w3TransDuration = new Duration(TimeSpan.FromMilliseconds(260));
+
+        private void ShowMainWindowAnimated(Window3 w3)
+        {
+            double mainLeft = Left, mainTop = Top;
+            double sx = w3.Width / ActualWidth, sy = w3.Height / ActualHeight;
+
+            // 위치만 w3으로 이동 (Width/Height는 변경 없음 → Win32 리사이즈 없음)
+            BeginAnimation(LeftProperty, null); BeginAnimation(TopProperty, null);
+            Left = w3.Left; Top = w3.Top;
+
+            // 콘텐츠를 w3 크기로 스케일 (GPU 렌더링 — Win32 호출 없음)
+            var scale = new ScaleTransform(sx, sy);
+            if (Content is FrameworkElement root)
+            {
+                root.RenderTransformOrigin = new System.Windows.Point(0, 0);
+                root.RenderTransform = scale;
+            }
+
+            Visibility = Visibility.Visible;
+            w3.Hide();
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            DoubleAnimation Anim(double from, double to) =>
+                new DoubleAnimation(from, to, _w3TransDuration) { EasingFunction = ease };
+
+            // 위치 애니메이션 (이동만, 리사이즈 없음)
+            var leftAnim = Anim(w3.Left, mainLeft);
+            leftAnim.Completed += (_, __) => { Left = mainLeft; BeginAnimation(LeftProperty, null); };
+            var topAnim  = Anim(w3.Top,  mainTop);
+            topAnim.Completed  += (_, __) => { Top  = mainTop;  BeginAnimation(TopProperty,  null); };
+            BeginAnimation(LeftProperty, leftAnim);
+            BeginAnimation(TopProperty,  topAnim);
+
+            // 스케일 애니메이션
+            var syAnim = Anim(sy, 1.0);
+            syAnim.Completed += (_, __) =>
+            {
+                if (Content is FrameworkElement r) r.RenderTransform = null;
+            };
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(sx, 1.0));
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, syAnim);
+        }
+
+        private void HideMainWindowAnimated(Window3 w3, Action onComplete)
+        {
+            double mainLeft = Left, mainTop = Top;
+            double sx = w3.Width / ActualWidth, sy = w3.Height / ActualHeight;
+
+            var scale = new ScaleTransform(1.0, 1.0);
+            if (Content is FrameworkElement root)
+            {
+                root.RenderTransformOrigin = new System.Windows.Point(0, 0);
+                root.RenderTransform = scale;
+            }
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
+            DoubleAnimation Anim(double from, double to) =>
+                new DoubleAnimation(from, to, _w3TransDuration) { EasingFunction = ease };
+
+            BeginAnimation(LeftProperty, Anim(mainLeft, w3.Left));
+            BeginAnimation(TopProperty,  Anim(mainTop,  w3.Top));
+
+            var syAnim = Anim(1.0, sy);
+            syAnim.Completed += (_, __) =>
+            {
+                BeginAnimation(LeftProperty, null); BeginAnimation(TopProperty, null);
+                Left = mainLeft; Top = mainTop;
+                if (Content is FrameworkElement r) r.RenderTransform = null;
+                Visibility = Visibility.Hidden;
+                onComplete();
+            };
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(1.0, sx));
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, syAnim);
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         private void setbtn_Click(object sender, RoutedEventArgs e)
         {
             // 메인윈도우가 보일 때만 Window1을 띄움
@@ -436,6 +558,7 @@ namespace WpfApp2
         // Window3이 떴을 때 Window1을 닫음 (수정: 숨겨진 Window3는 재표시)
         private void ShowWindow3AtLeftBottom()
         {
+            string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
             Window3? existing = null;
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
@@ -460,19 +583,18 @@ namespace WpfApp2
                 // 숨겨진 Window3 재사용
                 existing.Owner = this;
                 existing.WindowStartupLocation = WindowStartupLocation.Manual;
-                // 저장된 위치가 없으면 기본 위치 사용
-                string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
                 if (!File.Exists(window3PositionFile))
                 {
                     existing.Left = this.Left;
                     existing.Top = this.Top + this.Height - existing.Height;
                 }
-                // 저장된 위치가 있으면 RestorePosition()이 자동으로 처리
                 existing.ShowInTaskbar = false;
                 existing.Topmost = true;
-                this.Visibility = Visibility.Hidden;
-                existing.Show();
-                existing.Topmost = true;
+                HideMainWindowAnimated(existing, () =>
+                {
+                    existing.Show();
+                    existing.Topmost = true;
+                });
                 return;
             }
 
@@ -481,18 +603,15 @@ namespace WpfApp2
             win3.Owner = this;
             win3.WindowStartupLocation = WindowStartupLocation.Manual;
             win3.Topmost = true;
-            win3.Loaded += (s, e) =>
+
+            // 위치를 미리 계산 (애니메이션 목표 지점으로 사용)
+            if (!File.Exists(window3PositionFile))
             {
-                // 저장된 위치가 없을 때만 기본 위치 설정
-                string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
-                if (!File.Exists(window3PositionFile))
-                {
-                    win3.Left = this.Left;
-                    win3.Top = this.Top + this.Height - win3.Height;
-                }
-                // 저장된 위치가 있으면 생성자의 RestorePosition()이 이미 처리함
-                win3.Topmost = true;
-            };
+                win3.Left = this.Left;
+                win3.Top  = this.Top + this.Height - win3.Height;
+            }
+
+            win3.Loaded += (s, e) => win3.Topmost = true;
 
             bool isDragging = false;
             System.Windows.Point dragStartPoint = new System.Windows.Point();
@@ -531,9 +650,8 @@ namespace WpfApp2
                         if (win is Window2 w2 && w2.IsVisible)
                             w2.Hide();
                     }
-                    this.Visibility = Visibility.Visible;
+                    ShowMainWindowAnimated(win3);
                     this.Activate();
-                    win3.Hide(); // Hide instead of Close to allow reuse
                 }
                 isDragging = false;
             };
@@ -546,9 +664,11 @@ namespace WpfApp2
                     System.Windows.Application.Current.Shutdown();
                 }
             };
-            this.Visibility = Visibility.Hidden;
-            win3.Show();
-            win3.Topmost = true; // Show() 후에도 보장
+            HideMainWindowAnimated(win3, () =>
+            {
+                win3.Show();
+                win3.Topmost = true;
+            });
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -1577,7 +1697,7 @@ namespace WpfApp2
                         try { btn.FontFamily = new System.Windows.Media.FontFamily(state.CustomFontFamily); } catch { }
                     }
                 }
-                catch { }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[RestoreButtonState] content={state.Content} : {ex.Message}"); }
 
                 System.Windows.Controls.Canvas.SetLeft(btn, state.X);
                 System.Windows.Controls.Canvas.SetTop(btn, state.Y);
@@ -1636,7 +1756,8 @@ namespace WpfApp2
                     if (string.IsNullOrEmpty(meta.Path)) { System.Windows.MessageBox.Show("경로가 설정되지 않았습니다."); return; }
                     try
                     {
-                        if (Uri.IsWellFormedUriString(meta.Path, UriKind.Absolute))
+                        if (Uri.TryCreate(meta.Path, UriKind.Absolute, out var uri) &&
+                            (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp))
                         {
                             Process.Start(new ProcessStartInfo { FileName = meta.Path, UseShellExecute = true });
                         }
@@ -1968,6 +2089,10 @@ namespace WpfApp2
             public bool DbSortAscending { get; set; } = false;      // false = 내림차순(기본)
             public string? DbMiddleCategoryFilter { get; set; }     // 중분류 필터
             public string? DbMenuNameFilter { get; set; }           // 메뉴명 필터
+            public double InnerHeight { get; set; } = 0;            // 내부 CartesianChart 높이 (0=기본값)
+            public string ChartFont { get; set; } = "Malgun Gothic"; // 차트 전체 글꼴
+            public string? ChartLabelColor { get; set; }             // null=테마 기본, "#RRGGBB"=사용자 지정
+            public double ChartLabelSize { get; set; } = 0;          // 0=기본, >0=사용자 지정 크기
         }
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
@@ -2019,7 +2144,8 @@ namespace WpfApp2
                 if (string.IsNullOrEmpty(meta.Path)) { System.Windows.MessageBox.Show("경로가 설정되지 않았습니다."); return; }
                 try
                 {
-                    if (Uri.IsWellFormedUriString(meta.Path, UriKind.Absolute))
+                    if (Uri.TryCreate(meta.Path, UriKind.Absolute, out var uri) &&
+                        (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp))
                     {
                         Process.Start(new ProcessStartInfo { FileName = meta.Path, UseShellExecute = true });
                     }
@@ -2393,7 +2519,8 @@ namespace WpfApp2
                 Owner = this,
                 ResizeMode = System.Windows.ResizeMode.NoResize,
                 SizeToContent = SizeToContent.WidthAndHeight,
-                Width = 450
+                Width = 450,
+                MaxHeight = SystemParameters.PrimaryScreenHeight * 0.85
             };
             MakeBorderless(configDlg);
 
@@ -2410,21 +2537,6 @@ namespace WpfApp2
             configDlg.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = System.Windows.Media.Brushes.White;
 
             var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-
-            // 제목
-            stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 제목:", Margin = new Thickness(0, 0, 0, 4) });
-            var titleBox = new System.Windows.Controls.TextBox { Text = $"{chartType} Chart", Margin = new Thickness(0, 0, 0, 12) };
-            stack.Children.Add(titleBox);
-
-            // 크기
-            var sizePanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-            var widthBox = new System.Windows.Controls.TextBox { Text = "300", Width = 60, Margin = new Thickness(0, 0, 16, 0) };
-            sizePanel.Children.Add(widthBox);
-            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-            var heightBox = new System.Windows.Controls.TextBox { Text = "200", Width = 60 };
-            sizePanel.Children.Add(heightBox);
-            stack.Children.Add(sizePanel);
 
             // 데이터 소스 선택
             stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 소스:", Margin = new Thickness(0, 0, 0, 4) });
@@ -2562,15 +2674,12 @@ namespace WpfApp2
             {
                 try
                 {
-                    double width = double.Parse(widthBox.Text);
-                    double height = double.Parse(heightBox.Text);
-
                     var meta = new ChartMeta
                     {
                         ChartType = chartType,
-                        Width = width,
-                        Height = height,
-                        Title = titleBox.Text
+                        Width = 300,
+                        Height = 200,
+                        Title = $"{chartType} Chart"
                     };
 
                     int sourceIdx = sourceCombo.SelectedIndex;
@@ -2610,7 +2719,7 @@ namespace WpfApp2
 
                     if (meta.DataSource == "Db")
                     {
-                        try { LoadDbData(meta); } catch { }
+                        try { LoadDbData(meta); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex.Message}"); }
                     }
 
                     CreateChartControl(canvas, meta);
@@ -2627,7 +2736,13 @@ namespace WpfApp2
             btnPanel.Children.Add(cancelBtn2);
             stack.Children.Add(btnPanel);
 
-            configDlg.Content = stack;
+            var scrollViewer = new System.Windows.Controls.ScrollViewer
+            {
+                Content = stack,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
+            };
+            configDlg.Content = scrollViewer;
             ApplyDarkTheme(configDlg);
             configDlg.ShowDialog();
         }
@@ -2670,7 +2785,7 @@ namespace WpfApp2
             {
                 if (chartControl is System.Windows.Controls.Control ctrl)
                     ctrl.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
-                border.Child = chartControl;
+                border.Child = WrapWithDbDates(chartControl, meta);
             }
 
             // Canvas에 배치
@@ -2752,24 +2867,34 @@ namespace WpfApp2
         private static readonly SKColor P_Rust   = SKColor.Parse("#C0614A");
         private static readonly SKColor P_Sage   = SKColor.Parse("#4F8C5E");
 
+        private static System.Windows.Controls.ScrollViewer WrapInScrollViewer(CartesianChart chart)
+        {
+            var sv = new System.Windows.Controls.ScrollViewer
+            {
+                Content = chart,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
+            };
+            sv.PreviewMouseWheel += (s, e) =>
+            {
+                e.Handled = true; // 캔버스 ScrollViewer로 전달 차단
+                double delta = -e.Delta / 3.0;
+                double newOffset = Math.Max(0, Math.Min(sv.VerticalOffset + delta,
+                    sv.ScrollableHeight));
+                sv.ScrollToVerticalOffset(newOffset);
+            };
+            return sv;
+        }
+
         private static void AttachCtrlScrollZoom(CartesianChart chart)
         {
             chart.ZoomMode = LiveChartsCore.Measure.ZoomAndPanMode.None;
             chart.PreviewMouseWheel += (s, e) =>
             {
-                e.Handled = true; // 항상 캡처 → ScrollViewer로 절대 안 넘어감
+                e.Handled = true; // 캔버스 ScrollViewer로 전달 차단
 
                 bool ctrl = Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl);
-                if (!ctrl)
-                {
-                    // 일반 휠 → 부모 ScrollViewer 스크롤
-                    DependencyObject p = VisualTreeHelper.GetParent(chart);
-                    while (p != null && p is not System.Windows.Controls.ScrollViewer)
-                        p = VisualTreeHelper.GetParent(p);
-                    if (p is System.Windows.Controls.ScrollViewer sv)
-                        sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta / 3.0);
-                    return;
-                }
+                if (!ctrl) return; // 일반 휠은 차트에서 소비하고 종료
 
                 // Ctrl+휠 → 축 범위 수동 조정
                 double factor = e.Delta > 0 ? 0.8 : 1.25;
@@ -2803,10 +2928,17 @@ namespace WpfApp2
         {
             var (_, axisLabel, gridLine) = GetChartColors();
             var lineColor = P_Blue;
+            var tf = SKTypeface.FromFamilyName(meta.ChartFont);
+            var labelColor = ParseChartColor(meta.ChartLabelColor, axisLabel);
+            float xSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 9f;
+            float ySize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 11f;
+            float dlSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
             var chart = new CartesianChart
             {
+                UseLayoutRounding = true,
+                SnapsToDevicePixels = true,
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
-                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = tf },
                 TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
                 Series = new ISeries[]
                 {
@@ -2821,8 +2953,8 @@ namespace WpfApp2
                         GeometryFill = new SolidColorPaint(lineColor),
                         GeometryStroke = null,
                         LineSmoothness = 0.65,
-                        DataLabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
-                        DataLabelsSize = 10,
+                        DataLabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
+                        DataLabelsSize = dlSize,
                         DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
                         DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
                     }
@@ -2832,8 +2964,11 @@ namespace WpfApp2
                     new Axis
                     {
                         Labels = meta.Labels,
-                        LabelsRotation = 0,
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        LabelsRotation = -45,
+                        TextSize = xSize,
+                        MinStep = 1,
+                        ForceStepToMin = true,
+                        LabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
@@ -2842,7 +2977,8 @@ namespace WpfApp2
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        TextSize = ySize,
+                        LabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
@@ -2852,13 +2988,22 @@ namespace WpfApp2
             return chart;
         }
 
-        private CartesianChart CreateBarChart(ChartMeta meta)
+        private FrameworkElement CreateBarChart(ChartMeta meta)
         {
             var (_, axisLabel, gridLine) = GetChartColors();
+            double naturalH = Math.Max(300, meta.StaticData.Count * 40 + 80);
+            var tf = SKTypeface.FromFamilyName(meta.ChartFont);
+            var labelColor = ParseChartColor(meta.ChartLabelColor, axisLabel);
+            float axisSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 22f;
+            float dlSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
             var chart = new CartesianChart
             {
+                Height = naturalH,
+                UseLayoutRounding = true,
+                SnapsToDevicePixels = true,
+                ZoomMode = LiveChartsCore.Measure.ZoomAndPanMode.None,
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
-                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = tf },
                 TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
                 Series = new ISeries[]
                 {
@@ -2872,8 +3017,8 @@ namespace WpfApp2
                         Rx = 3,
                         Ry = 3,
                         MaxBarWidth = double.PositiveInfinity,
-                        DataLabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
-                        DataLabelsSize = 10,
+                        DataLabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
+                        DataLabelsSize = dlSize,
                         DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
                         DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
                     }
@@ -2883,7 +3028,11 @@ namespace WpfApp2
                     new Axis
                     {
                         Labels = meta.Labels,
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        LabelsRotation = -35,
+                        TextSize = axisSize,
+                        MinStep = 1,
+                        ForceStepToMin = true,
+                        LabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
                         SeparatorsPaint = null,
                         TicksPaint = null
                     }
@@ -2892,17 +3041,18 @@ namespace WpfApp2
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        TextSize = axisSize,
+                        LabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
                         SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
                 }
             };
-            AttachCtrlScrollZoom(chart);
-            return chart;
+            AttachChartClickDetails(chart, meta);
+            return WrapInScrollViewer(chart);
         }
 
-        private CartesianChart CreateHBarChart(ChartMeta meta)
+        private FrameworkElement CreateHBarChart(ChartMeta meta)
         {
             var (_, axisLabel, gridLine) = GetChartColors();
 
@@ -2910,13 +3060,24 @@ namespace WpfApp2
             var displayValues = meta.StaticData.AsEnumerable().Reverse().ToList();
             var displayLabels = meta.Labels.AsEnumerable().Reverse().ToList();
 
-            var labelPaint = new SolidColorPaint(new SKColor(240, 240, 240))
-                { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") };
+            var tf = SKTypeface.FromFamilyName(meta.ChartFont);
+            var (_, axisLabelHBar, gridLineHBar) = GetChartColors();
+            var labelColorHBar = ParseChartColor(meta.ChartLabelColor, new SKColor(240, 240, 240));
+            var axisColorHBar = ParseChartColor(meta.ChartLabelColor, axisLabelHBar);
+            float yHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 18f;
+            float xHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 20f;
+            float dlHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
+            var labelPaint = new SolidColorPaint(labelColorHBar) { SKTypeface = tf };
+            double naturalH = Math.Max(200, displayValues.Count * 38 + 60);
 
             var chart = new CartesianChart
             {
+                Height = naturalH,
+                UseLayoutRounding = true,
+                SnapsToDevicePixels = true,
+                ZoomMode = LiveChartsCore.Measure.ZoomAndPanMode.None,
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
-                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = tf },
                 TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
                 Series = new ISeries[]
                 {
@@ -2931,8 +3092,9 @@ namespace WpfApp2
                         Ry = 3,
                         MaxBarWidth = 40,
                         DataLabelsPaint = labelPaint,
-                        DataLabelsSize = 10,
-                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Middle,
+                        DataLabelsSize = dlHSize,
+                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Start,
+                        DataLabelsTranslate = new LiveChartsCore.Drawing.LvcPoint(1.0, 0),
                         DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
                     }
                 },
@@ -2941,24 +3103,27 @@ namespace WpfApp2
                     new Axis
                     {
                         Labels = displayLabels,
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
+                        LabelsPaint = new SolidColorPaint(axisColorHBar) { SKTypeface = tf },
                         SeparatorsPaint = null,
                         TicksPaint = null,
-                        TextSize = 11
+                        TextSize = yHSize,
+                        MinStep = 1,
+                        ForceStepToMin = true
                     }
                 },
                 XAxes = new[]
                 {
                     new Axis
                     {
-                        LabelsPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") },
-                        SeparatorsPaint = new SolidColorPaint(gridLine.WithAlpha(80)) { StrokeThickness = 1 },
+                        TextSize = xHSize,
+                        LabelsPaint = new SolidColorPaint(axisColorHBar) { SKTypeface = tf },
+                        SeparatorsPaint = new SolidColorPaint(gridLineHBar.WithAlpha(80)) { StrokeThickness = 1 },
                         TicksPaint = null
                     }
                 }
             };
-            AttachCtrlScrollZoom(chart);
-            return chart;
+            AttachChartClickDetails(chart, meta);
+            return WrapInScrollViewer(chart);
         }
 
         private PieChart CreatePieChart(ChartMeta meta)
@@ -2984,7 +3149,7 @@ namespace WpfApp2
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Hidden,
                 Series = series,
                 LegendPosition = LiveChartsCore.Measure.LegendPosition.Right,
-                LegendTextPaint = new SolidColorPaint(axisLabel) { SKTypeface = SKTypeface.FromFamilyName("Malgun Gothic") }
+                LegendTextPaint = new SolidColorPaint(ParseChartColor(meta.ChartLabelColor, axisLabel)) { SKTypeface = SKTypeface.FromFamilyName(meta.ChartFont) }
             };
             return chart;
         }
@@ -3051,7 +3216,11 @@ namespace WpfApp2
                         {
                             if (newChart is System.Windows.Controls.Control ctrl)
                                 ctrl.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
-                            chartBorder.Child = newChart;
+                            if (meta.InnerHeight > 0 &&
+                                newChart is System.Windows.Controls.ScrollViewer svTh &&
+                                svTh.Content is CartesianChart ccTh)
+                                ApplyInnerChartHeight(ccTh, meta);
+                            chartBorder.Child = WrapWithDbDates(newChart, meta);
                         }
                     }
                 }
@@ -3076,49 +3245,226 @@ namespace WpfApp2
         private void AttachChartDragHandlers(Border border, Canvas canvas)
         {
             bool isDragging = false;
-            System.Windows.Point dragStart = new System.Windows.Point();
-            System.Windows.Point elementStart = new System.Windows.Point();
+            bool isResizing = false;
+            bool isResizingInner = false;
+            bool shiftWasPressedOnStart = false;
+            System.Windows.Point dragStart = new();
+            System.Windows.Point elementStart = new();
+            double origW = 0, origH = 0, innerStartH = 0;
+            ResizeDirection resizeDirection = ResizeDirection.None;
+            const double ResizeGripSize = 10.0;
+            const double DragThreshold = 3.0;
 
-            border.MouseLeftButtonDown += (s, e) =>
+            CartesianChart? GetInnerChart() => GetInnerChartFromChild(border.Child);
+
+            ResizeDirection GetChartResizeDir(System.Windows.Point pos)
             {
-                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+                double w = border.ActualWidth > 0 ? border.ActualWidth : border.Width;
+                double h = border.ActualHeight > 0 ? border.ActualHeight : border.Height;
+                bool L = pos.X <= ResizeGripSize, R = pos.X >= w - ResizeGripSize;
+                bool T = pos.Y <= ResizeGripSize, B = pos.Y >= h - ResizeGripSize;
+                if (T && L) return ResizeDirection.TopLeft;
+                if (T && R) return ResizeDirection.TopRight;
+                if (B && L) return ResizeDirection.BottomLeft;
+                if (B && R) return ResizeDirection.BottomRight;
+                if (T) return ResizeDirection.Top;
+                if (B) return ResizeDirection.Bottom;
+                if (L) return ResizeDirection.Left;
+                if (R) return ResizeDirection.Right;
+                return ResizeDirection.None;
+            }
+
+            System.Windows.Input.Cursor DirToCursor(ResizeDirection dir) => dir switch
+            {
+                ResizeDirection.Left or ResizeDirection.Right => System.Windows.Input.Cursors.SizeWE,
+                ResizeDirection.Top or ResizeDirection.Bottom => System.Windows.Input.Cursors.SizeNS,
+                ResizeDirection.TopLeft or ResizeDirection.BottomRight => System.Windows.Input.Cursors.SizeNWSE,
+                ResizeDirection.TopRight or ResizeDirection.BottomLeft => System.Windows.Input.Cursors.SizeNESW,
+                _ => System.Windows.Input.Cursors.Arrow
+            };
+
+            border.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+                bool ctrl  = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+
+                if (shift && ctrl)
                 {
-                    isDragging = true;
+                    isResizingInner = true;
+                    innerStartH = GetInnerChart()?.Height ?? border.Height;
+                    dragStart = e.GetPosition(canvas);
+                    border.CaptureMouse();
+                    e.Handled = true;
+                }
+                else if (shift)
+                {
+                    shiftWasPressedOnStart = true;
                     dragStart = e.GetPosition(canvas);
                     elementStart = new System.Windows.Point(
                         System.Windows.Controls.Canvas.GetLeft(border),
                         System.Windows.Controls.Canvas.GetTop(border));
+                    origW = border.ActualWidth > 0 ? border.ActualWidth : border.Width;
+                    origH = border.ActualHeight > 0 ? border.ActualHeight : border.Height;
+                    resizeDirection = GetChartResizeDir(e.GetPosition(border));
+                    isResizing = resizeDirection != ResizeDirection.None;
+                    isDragging = false;
                     border.CaptureMouse();
                     e.Handled = true;
                 }
+                // Shift 없으면 이벤트 전파 (컨텍스트 메뉴 등 정상 동작)
             };
 
             border.MouseMove += (s, e) =>
             {
-                if (isDragging)
+                if (!border.IsMouseCaptured)
                 {
-                    var current = e.GetPosition(canvas);
-                    double newX = elementStart.X + (current.X - dragStart.X);
-                    double newY = elementStart.Y + (current.Y - dragStart.Y);
+                    bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+                    bool ctrl  = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                    if (shift && ctrl)
+                        border.Cursor = System.Windows.Input.Cursors.SizeNS;
+                    else if (shift)
+                    {
+                        var dir = GetChartResizeDir(e.GetPosition(border));
+                        border.Cursor = dir == ResizeDirection.None
+                            ? System.Windows.Input.Cursors.SizeAll
+                            : DirToCursor(dir);
+                    }
+                    else
+                        border.Cursor = System.Windows.Input.Cursors.Arrow;
+                    return;
+                }
 
-                    // 그리드 스냅
-                    newX = Math.Round(newX / GridSize) * GridSize;
-                    newY = Math.Round(newY / GridSize) * GridSize;
+                var current = e.GetPosition(canvas);
 
-                    System.Windows.Controls.Canvas.SetLeft(border, newX);
-                    System.Windows.Controls.Canvas.SetTop(border, newY);
+                if (isResizingInner)
+                {
+                    var inner = GetInnerChart();
+                    if (inner != null)
+                    {
+                        double newH = Math.Max(100, innerStartH + (current.Y - dragStart.Y));
+                        if (border.Tag is ChartMeta mi)
+                        {
+                            mi.InnerHeight = newH;
+                            ApplyInnerChartHeight(inner, mi);
+                        }
+                        else
+                            inner.Height = newH;
+                    }
+                }
+                else if (shiftWasPressedOnStart)
+                {
+                    var diff = current - dragStart;
+                    if (!isDragging && !isResizing && diff.Length > DragThreshold)
+                    {
+                        if (resizeDirection != ResizeDirection.None) isResizing = true;
+                        else isDragging = true;
+                    }
+
+                    if (isResizing)
+                    {
+                        double newX = elementStart.X, newY = elementStart.Y;
+                        double newW = origW, newH = origH;
+                        switch (resizeDirection)
+                        {
+                            case ResizeDirection.Right:       newW = origW + diff.X; break;
+                            case ResizeDirection.Left:        newW = origW - diff.X; newX = elementStart.X + diff.X; break;
+                            case ResizeDirection.Bottom:      newH = origH + diff.Y; break;
+                            case ResizeDirection.Top:         newH = origH - diff.Y; newY = elementStart.Y + diff.Y; break;
+                            case ResizeDirection.BottomRight: newW = origW + diff.X; newH = origH + diff.Y; break;
+                            case ResizeDirection.BottomLeft:  newW = origW - diff.X; newH = origH + diff.Y; newX = elementStart.X + diff.X; break;
+                            case ResizeDirection.TopRight:    newW = origW + diff.X; newH = origH - diff.Y; newY = elementStart.Y + diff.Y; break;
+                            case ResizeDirection.TopLeft:     newW = origW - diff.X; newH = origH - diff.Y; newX = elementStart.X + diff.X; newY = elementStart.Y + diff.Y; break;
+                        }
+                        newW = Math.Round(Math.Max(80, Math.Min(newW, canvas.Width - newX)) / GridSize) * GridSize;
+                        newH = Math.Round(Math.Max(60, Math.Min(newH, canvas.Height - newY)) / GridSize) * GridSize;
+                        newX = Math.Round(Math.Max(0, Math.Min(newX, canvas.Width  - newW)) / GridSize) * GridSize;
+                        newY = Math.Round(Math.Max(0, Math.Min(newY, canvas.Height - newH)) / GridSize) * GridSize;
+                        border.Width = newW; border.Height = newH;
+                        System.Windows.Controls.Canvas.SetLeft(border, newX);
+                        System.Windows.Controls.Canvas.SetTop(border, newY);
+                        if (border.Tag is ChartMeta mr) { mr.Width = newW; mr.Height = newH; }
+                    }
+                    else if (isDragging)
+                    {
+                        double newX = Math.Round(Math.Max(0, Math.Min(elementStart.X + diff.X, canvas.Width  - border.Width))  / GridSize) * GridSize;
+                        double newY = Math.Round(Math.Max(0, Math.Min(elementStart.Y + diff.Y, canvas.Height - border.Height)) / GridSize) * GridSize;
+                        System.Windows.Controls.Canvas.SetLeft(border, newX);
+                        System.Windows.Controls.Canvas.SetTop(border, newY);
+                    }
                 }
             };
 
             border.MouseLeftButtonUp += (s, e) =>
             {
-                if (isDragging)
+                if (isDragging || isResizing || isResizingInner || shiftWasPressedOnStart)
                 {
                     isDragging = false;
+                    isResizing = false;
+                    isResizingInner = false;
+                    shiftWasPressedOnStart = false;
                     border.ReleaseMouseCapture();
                     SaveAllChartStates();
                 }
             };
+        }
+
+        private static System.Windows.Controls.ComboBox BuildChartFontCombo(string currentFont)
+        {
+            var combo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+            combo.Style = null;
+            var fonts = new[] { "Malgun Gothic", "맑은 고딕", "굴림", "돋움", "바탕", "나눔고딕", "나눔바른고딕", "Segoe UI", "Arial", "Tahoma", "Consolas" };
+            foreach (var f in fonts) combo.Items.Add(f);
+            combo.SelectedItem = fonts.Contains(currentFont) ? currentFont : fonts[0];
+            return combo;
+        }
+
+        private static readonly (string Label, string? Hex)[] ChartColorPresets =
+        {
+            ("기본 (테마)", null),
+            ("흰색",   "#F0F0F0"),
+            ("밝은 회색", "#C0C0C0"),
+            ("진한 회색", "#606060"),
+            ("검정",   "#202020"),
+            ("파랑",   "#5599FF"),
+            ("하늘색", "#44CCEE"),
+            ("초록",   "#4CAF50"),
+            ("빨강",   "#FF5A5A"),
+            ("노랑",   "#FFD700"),
+            ("주황",   "#FF9800"),
+        };
+
+        private static System.Windows.Controls.ComboBox BuildChartColorCombo(string? currentHex)
+        {
+            var combo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+            combo.Style = null;
+            foreach (var (label, _) in ChartColorPresets) combo.Items.Add(label);
+            int idx = 0;
+            for (int i = 0; i < ChartColorPresets.Length; i++)
+                if (ChartColorPresets[i].Hex == currentHex) { idx = i; break; }
+            combo.SelectedIndex = idx;
+            return combo;
+        }
+
+        private static System.Windows.Controls.ComboBox BuildChartSizeCombo(double currentSize)
+        {
+            var combo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+            combo.Style = null;
+            var sizes = new[] { "기본", "8", "10", "11", "12", "13", "14", "16", "18", "20" };
+            foreach (var s in sizes) combo.Items.Add(s);
+            string cur = currentSize > 0 ? ((int)currentSize).ToString() : "기본";
+            combo.SelectedItem = sizes.Contains(cur) ? cur : "기본";
+            return combo;
+        }
+
+        private static SKColor ParseChartColor(string? hex, SKColor fallback)
+        {
+            if (string.IsNullOrEmpty(hex)) return fallback;
+            try
+            {
+                var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+                return new SKColor(c.R, c.G, c.B, c.A);
+            }
+            catch { return fallback; }
         }
 
         private void EditChartDialog(Border border, Canvas canvas, ChartMeta meta)
@@ -3137,16 +3483,6 @@ namespace WpfApp2
 
             var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
 
-            // 크기 수정
-            var sizePanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-            var widthBox = new System.Windows.Controls.TextBox { Text = meta.Width.ToString(), Width = 60, Margin = new Thickness(0, 0, 16, 0) };
-            sizePanel.Children.Add(widthBox);
-            sizePanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-            var heightBox = new System.Windows.Controls.TextBox { Text = meta.Height.ToString(), Width = 60 };
-            sizePanel.Children.Add(heightBox);
-            stack.Children.Add(sizePanel);
-
             // 데이터 수정 (정적 데이터만)
             if (meta.DataSource == "Static")
             {
@@ -3158,19 +3494,29 @@ namespace WpfApp2
                 var labelBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.Labels), Margin = new Thickness(0, 0, 0, 12) };
                 stack.Children.Add(labelBox);
 
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 글꼴:", Margin = new Thickness(0, 0, 0, 4) });
+                var sFontCombo = BuildChartFontCombo(meta.ChartFont);
+                stack.Children.Add(sFontCombo);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 색상:", Margin = new Thickness(0, 0, 0, 4) });
+                var sColorCombo = BuildChartColorCombo(meta.ChartLabelColor);
+                stack.Children.Add(sColorCombo);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 크기:", Margin = new Thickness(0, 0, 0, 4) });
+                var sSizeCombo = BuildChartSizeCombo(meta.ChartLabelSize);
+                stack.Children.Add(sSizeCombo);
+
                 var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
                 var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
                 var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
 
                 applyBtn.Click += (s, ev) =>
                 {
-                    meta.Width = double.Parse(widthBox.Text);
-                    meta.Height = double.Parse(heightBox.Text);
                     meta.StaticData = dataBox.Text.Split(',').Select(x => double.TryParse(x.Trim(), out var v) ? v : 0).ToList();
                     meta.Labels = labelBox.Text.Split(',').Select(x => x.Trim()).ToList();
-
-                    border.Width = meta.Width;
-                    border.Height = meta.Height;
+                    meta.ChartFont = sFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
+                    meta.ChartLabelColor = ChartColorPresets[sColorCombo.SelectedIndex].Hex;
+                    meta.ChartLabelSize = sSizeCombo.SelectedItem?.ToString() is string sv && double.TryParse(sv, out var sd) ? sd : 0;
 
                     // 차트 다시 생성
                     FrameworkElement newChart = null;
@@ -3183,7 +3529,13 @@ namespace WpfApp2
                         case "Gauge": newChart = CreateGaugeChart(meta); break;
                     }
                     if (newChart != null)
-                        border.Child = newChart;
+                    {
+                        if (meta.InnerHeight > 0 &&
+                            newChart is System.Windows.Controls.ScrollViewer svEdit1 &&
+                            svEdit1.Content is CartesianChart ccEdit1)
+                            ApplyInnerChartHeight(ccEdit1, meta);
+                        border.Child = WrapWithDbDates(newChart, meta);
+                    }
 
                     SaveAllChartStates();
                     configDlg.Close();
@@ -3252,21 +3604,31 @@ namespace WpfApp2
 
                 // 정렬
                 stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "정렬:", Margin = new Thickness(0, 0, 0, 4) });
-                var eSortCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 12) };
+                var eSortCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
                 eSortCombo.Style = null;
                 eSortCombo.Items.Add("내림차순 (높은 값 먼저)");
                 eSortCombo.Items.Add("오름차순 (낮은 값 먼저)");
                 eSortCombo.SelectedIndex = meta.DbSortAscending ? 1 : 0;
                 stack.Children.Add(eSortCombo);
 
-                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 글꼴:", Margin = new Thickness(0, 4, 0, 4) });
+                var eFontCombo = BuildChartFontCombo(meta.ChartFont);
+                stack.Children.Add(eFontCombo);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 색상:", Margin = new Thickness(0, 0, 0, 4) });
+                var eColorCombo = BuildChartColorCombo(meta.ChartLabelColor);
+                stack.Children.Add(eColorCombo);
+
+                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 크기:", Margin = new Thickness(0, 0, 0, 4) });
+                var eSizeCombo = BuildChartSizeCombo(meta.ChartLabelSize);
+                stack.Children.Add(eSizeCombo);
+
+                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
                 var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
                 var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
 
                 applyBtn.Click += (s, ev) =>
                 {
-                    meta.Width = double.Parse(widthBox.Text);
-                    meta.Height = double.Parse(heightBox.Text);
                     meta.DbGroupBy = eGroupByCombo.SelectedItem?.ToString() ?? "매장명";
                     meta.DbValueColumn = eValueCombo.SelectedItem?.ToString() ?? "총매출액";
                     meta.DbStartDate = eStartDate.SelectedDate;
@@ -3275,11 +3637,11 @@ namespace WpfApp2
                     meta.DbMiddleCategoryFilter = eMiddleCatBox.SelectedIndex <= 0 ? null : eMiddleCatBox.SelectedItem?.ToString();
                     meta.DbMenuNameFilter = eMenuBox.SelectedIndex <= 0 ? null : eMenuBox.SelectedItem?.ToString();
                     meta.DbSortAscending = eSortCombo.SelectedIndex == 1;
+                    meta.ChartFont = eFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
+                    meta.ChartLabelColor = ChartColorPresets[eColorCombo.SelectedIndex].Hex;
+                    meta.ChartLabelSize = eSizeCombo.SelectedItem?.ToString() is string ev2 && double.TryParse(ev2, out var ed) ? ed : 0;
 
-                    border.Width = meta.Width;
-                    border.Height = meta.Height;
-
-                    try { LoadDbData(meta); } catch { }
+                    try { LoadDbData(meta); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex.Message}"); }
 
                     FrameworkElement newChart = null;
                     switch (meta.ChartType)
@@ -3291,7 +3653,13 @@ namespace WpfApp2
                         case "Gauge": newChart = CreateGaugeChart(meta); break;
                     }
                     if (newChart != null)
-                        border.Child = newChart;
+                    {
+                        if (meta.InnerHeight > 0 &&
+                            newChart is System.Windows.Controls.ScrollViewer svEdit2 &&
+                            svEdit2.Content is CartesianChart ccEdit2)
+                            ApplyInnerChartHeight(ccEdit2, meta);
+                        border.Child = WrapWithDbDates(newChart, meta);
+                    }
 
                     SaveAllChartStates();
                     configDlg.Close();
@@ -3345,7 +3713,13 @@ namespace WpfApp2
                     case "Gauge": newChart = CreateGaugeChart(meta); break;
                 }
                 if (newChart != null)
-                    border.Child = newChart;
+                {
+                    if (meta.InnerHeight > 0 &&
+                        newChart is System.Windows.Controls.ScrollViewer svRef &&
+                        svRef.Content is CartesianChart ccRef)
+                        ApplyInnerChartHeight(ccRef, meta);
+                    border.Child = WrapWithDbDates(newChart, meta);
+                }
             }
             catch (Exception ex)
             {
@@ -3362,9 +3736,10 @@ namespace WpfApp2
             {
                 json = File.ReadAllText(meta.DataPath);
             }
-            else if (Uri.IsWellFormedUriString(meta.DataPath, UriKind.Absolute))
+            else if (Uri.TryCreate(meta.DataPath, UriKind.Absolute, out var dataUri) &&
+                     (dataUri.Scheme == Uri.UriSchemeHttps || dataUri.Scheme == Uri.UriSchemeHttp))
             {
-                using var client = new HttpClient();
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
                 json = await client.GetStringAsync(meta.DataPath);
             }
             else
@@ -3426,27 +3801,35 @@ namespace WpfApp2
             }
         }
 
+        private static readonly HashSet<string> AllowedDistinctColumns = new() { "매장명", "중분류", "메뉴명" };
+
         private List<string> LoadDbDistinctValues(string column)
         {
             var result = new List<string>();
+            if (!AllowedDistinctColumns.Contains(column)) return result;
             try
             {
-                const string cs = "Server=localhost\\SQLEXPRESS;Database=대진포스DB;Integrated Security=True;TrustServerCertificate=True;";
+                string cs = DatabaseService.DataConnectionString;
+                if (string.IsNullOrWhiteSpace(cs)) return result;
                 using var conn = new SqlConnection(cs);
                 conn.Open();
                 using var cmd = new SqlCommand($"SELECT DISTINCT [{column}] FROM 매출데이터 WHERE [{column}] IS NOT NULL AND [{column}] <> '' ORDER BY [{column}]", conn);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read()) result.Add(reader.GetString(0));
             }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbDistinctValues] column={column} : {ex.Message}"); }
             return result;
         }
 
+        private static readonly HashSet<string> AllowedGroupByColumns = new() { "매장명", "중분류", "메뉴명" };
+        private static readonly HashSet<string> AllowedValueColumns = new() { "총매출액", "총수량", "판매수량", "서비스수량" };
+
         private void LoadDbData(ChartMeta meta)
         {
-            const string cs = "Server=localhost\\SQLEXPRESS;Database=대진포스DB;Integrated Security=True;TrustServerCertificate=True;";
-            var groupBy = meta.DbGroupBy ?? "매장명";
-            var valueCol = meta.DbValueColumn ?? "총매출액";
+            string cs = DatabaseService.DataConnectionString;
+            if (string.IsNullOrWhiteSpace(cs)) return;
+            var groupBy = AllowedGroupByColumns.Contains(meta.DbGroupBy ?? "") ? meta.DbGroupBy! : "매장명";
+            var valueCol = AllowedValueColumns.Contains(meta.DbValueColumn ?? "") ? meta.DbValueColumn! : "총매출액";
             var start = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
             var end = meta.DbEndDate ?? DateTime.Today.AddDays(-1);
             var sortDir = meta.DbSortAscending ? "ASC" : "DESC";
@@ -3486,6 +3869,433 @@ ORDER BY 값 {sortDir}";
             meta.StaticData = values;
         }
 
+        private FrameworkElement WrapWithDbDates(FrameworkElement chartControl, ChartMeta meta)
+        {
+            var outerGrid = new Grid { Tag = "DbChartWrapper" };
+
+            // ── Row 0: 제목 ──────────────────────────────────────────────────────
+            outerGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var titleBlock = new System.Windows.Controls.TextBlock
+            {
+                Text = meta.Title,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(4, 4, 4, 2),
+                Cursor = System.Windows.Input.Cursors.IBeam,
+                Visibility = string.IsNullOrWhiteSpace(meta.Title) ? Visibility.Collapsed : Visibility.Visible
+            };
+            titleBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+
+            var titleHint = new System.Windows.Controls.TextBlock
+            {
+                Text = "+ 제목",
+                FontSize = 11,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(4, 4, 4, 2),
+                Cursor = System.Windows.Input.Cursors.IBeam,
+                Opacity = 0.3,
+                Visibility = string.IsNullOrWhiteSpace(meta.Title) ? Visibility.Visible : Visibility.Collapsed
+            };
+            titleHint.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+
+            var titlePanel = new Grid { Background = System.Windows.Media.Brushes.Transparent };
+            titlePanel.Children.Add(titleHint);
+            titlePanel.Children.Add(titleBlock);
+            Grid.SetRow(titlePanel, 0);
+            outerGrid.Children.Add(titlePanel);
+
+            bool titleEditActive = false;
+
+            void EnterTitleEdit()
+            {
+                if (titleEditActive) return;
+                titleEditActive = true;
+
+                var tb = new System.Windows.Controls.TextBox
+                {
+                    Text = meta.Title,
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
+                    TextAlignment = TextAlignment.Center,
+                    BorderThickness = new Thickness(0, 0, 0, 1),
+                    Background = System.Windows.Media.Brushes.Transparent,
+                    Margin = new Thickness(4, 4, 4, 2)
+                };
+                tb.SetResourceReference(System.Windows.Controls.TextBox.ForegroundProperty, "ForegroundBrush");
+                tb.SetResourceReference(System.Windows.Controls.TextBox.BorderBrushProperty, "StatusBarBorderBrush");
+
+                titleBlock.Visibility = Visibility.Collapsed;
+                titleHint.Visibility  = Visibility.Collapsed;
+                titlePanel.Children.Add(tb);
+
+                bool finished = false;
+                void FinishEdit()
+                {
+                    if (finished) return;
+                    finished = true;
+                    titleEditActive = false;
+                    meta.Title = tb.Text.Trim();
+                    titleBlock.Text = meta.Title;
+                    titleBlock.Visibility = string.IsNullOrWhiteSpace(meta.Title) ? Visibility.Collapsed : Visibility.Visible;
+                    titleHint.Visibility  = string.IsNullOrWhiteSpace(meta.Title) ? Visibility.Visible  : Visibility.Collapsed;
+                    titlePanel.Children.Remove(tb);
+                    SaveAllChartStates();
+                }
+
+                tb.KeyDown   += (_, ke) => { if (ke.Key == Key.Return || ke.Key == Key.Escape) FinishEdit(); };
+                tb.LostFocus += (_, __)  => FinishEdit();
+
+                Dispatcher.BeginInvoke(new Action(() => { tb.Focus(); tb.SelectAll(); }),
+                    System.Windows.Threading.DispatcherPriority.Input);
+            }
+
+            titlePanel.PreviewMouseLeftButtonDown += (_, e) =>
+            {
+                if (titleEditActive) return;
+                bool onHint  = titleHint.Visibility  == Visibility.Visible;
+                bool onBlock = titleBlock.Visibility == Visibility.Visible;
+                if (onHint && e.ClickCount >= 1) { e.Handled = true; EnterTitleEdit(); }
+                else if (onBlock && e.ClickCount >= 2) { e.Handled = true; EnterTitleEdit(); }
+            };
+
+            if (meta.DataSource == "Db")
+            {
+                // ── Row 1: 날짜 컨트롤 ───────────────────────────────────────────
+                outerGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                // ── Row 2: 차트 ──────────────────────────────────────────────────
+                outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                Func<DateTime?> getStart = () => null;
+                Func<DateTime?> getEnd   = () => null;
+                FrameworkElement startCtrl, endCtrl;
+                (startCtrl, getStart) = CreateThemeDatePicker(meta.DbStartDate, () => RefreshInner());
+                (endCtrl,   getEnd)   = CreateThemeDatePicker(meta.DbEndDate,   () => RefreshInner());
+                startCtrl.Margin = new Thickness(0, 0, 3, 0);
+
+                var lblStart = new System.Windows.Controls.TextBlock { Text = "시작", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0), FontSize = 10 };
+                var lblSep   = new System.Windows.Controls.TextBlock { Text = "~",   VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 3, 0), FontSize = 10 };
+                lblStart.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                lblSep.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+
+                var datePanel = new System.Windows.Controls.StackPanel
+                {
+                    Orientation = System.Windows.Controls.Orientation.Horizontal,
+                    Margin = new Thickness(4, 2, 4, 2),
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+                };
+                datePanel.Children.Add(lblStart);
+                datePanel.Children.Add(startCtrl);
+                datePanel.Children.Add(lblSep);
+                datePanel.Children.Add(endCtrl);
+
+                Grid.SetRow(datePanel, 1);
+                Grid.SetRow(chartControl, 2);
+                outerGrid.Children.Add(datePanel);
+                outerGrid.Children.Add(chartControl);
+
+                void RefreshInner()
+                {
+                    var s = getStart(); var e = getEnd();
+                    if (!s.HasValue || !e.HasValue) return;
+                    meta.DbStartDate = s; meta.DbEndDate = e;
+                    try { LoadDbData(meta); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex.Message}"); }
+
+                    FrameworkElement newInner = meta.ChartType switch
+                    {
+                        "Line"  => CreateLineChart(meta),
+                        "Bar"   => CreateBarChart(meta),
+                        "HBar"  => CreateHBarChart(meta),
+                        "Pie"   => CreatePieChart(meta),
+                        "Gauge" => CreateGaugeChart(meta),
+                        _ => null
+                    };
+                    if (newInner == null) return;
+                    if (meta.InnerHeight > 0 &&
+                        newInner is System.Windows.Controls.ScrollViewer sv2 &&
+                        sv2.Content is CartesianChart cc2)
+                        ApplyInnerChartHeight(cc2, meta);
+
+                    var oldChart = outerGrid.Children.OfType<FrameworkElement>().FirstOrDefault(c => Grid.GetRow(c) == 2);
+                    if (oldChart != null) outerGrid.Children.Remove(oldChart);
+                    Grid.SetRow(newInner, 2);
+                    outerGrid.Children.Add(newInner);
+                    SaveAllChartStates();
+                }
+            }
+            else
+            {
+                // ── Row 1: 차트 ──────────────────────────────────────────────────
+                outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                Grid.SetRow(chartControl, 1);
+                outerGrid.Children.Add(chartControl);
+            }
+
+            return outerGrid;
+        }
+
+        private (FrameworkElement control, Func<DateTime?> getDate) CreateThemeDatePicker(
+            DateTime? initialDate, Action onChanged)
+        {
+            DateTime? selected = initialDate;
+
+            var btn = new Border
+            {
+                CornerRadius = new CornerRadius(3),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(5, 2, 5, 2),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                MinWidth = 85
+            };
+            btn.SetResourceReference(Border.BackgroundProperty, "ContextMenuBackgroundBrush");
+            btn.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+
+            var txt = new System.Windows.Controls.TextBlock
+            {
+                Text = initialDate?.ToString("yy-MM-dd") ?? "날짜 선택",
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                FontSize = 10
+            };
+            txt.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+            btn.Child = txt;
+
+            var cal = new System.Windows.Controls.Calendar
+            {
+                DisplayMode = System.Windows.Controls.CalendarMode.Month,
+                SelectedDate = initialDate
+            };
+            cal.SetResourceReference(System.Windows.Controls.Calendar.BackgroundProperty, "ContextMenuBackgroundBrush");
+            cal.SetResourceReference(System.Windows.Controls.Calendar.ForegroundProperty, "ForegroundBrush");
+            cal.SetResourceReference(System.Windows.Controls.Calendar.BorderBrushProperty, "StatusBarBorderBrush");
+            cal.BorderThickness = new Thickness(1);
+
+            void ApplyCalDayStyle()
+            {
+                bool isDark = ThemeManager.CurrentTheme != ThemeManager.Theme.White;
+                var res = System.Windows.Application.Current.Resources;
+                var themeBg = (res["ContextMenuBackgroundBrush"] as System.Windows.Media.Brush)
+                              ?? new System.Windows.Media.SolidColorBrush(
+                                  isDark ? System.Windows.Media.Color.FromRgb(30, 30, 40)
+                                         : System.Windows.Media.Color.FromRgb(245, 245, 252));
+                var dayFg = new System.Windows.Media.SolidColorBrush(isDark
+                    ? System.Windows.Media.Color.FromRgb(220, 220, 235)
+                    : System.Windows.Media.Color.FromRgb(20, 20, 30));
+                var dayHov = new System.Windows.Media.SolidColorBrush(isDark
+                    ? System.Windows.Media.Color.FromRgb(50, 50, 85)
+                    : System.Windows.Media.Color.FromRgb(195, 210, 255));
+
+                // CalendarItem: 헤더(월/년 + 화살표) 배경/글씨 색상
+                var calItemStyle = new System.Windows.Style(typeof(System.Windows.Controls.Primitives.CalendarItem));
+                calItemStyle.Setters.Add(new System.Windows.Setter(
+                    System.Windows.Controls.Primitives.CalendarItem.BackgroundProperty, themeBg));
+                calItemStyle.Setters.Add(new System.Windows.Setter(
+                    System.Windows.Controls.Primitives.CalendarItem.ForegroundProperty, dayFg));
+                cal.CalendarItemStyle = calItemStyle;
+
+                var dayStyle = new System.Windows.Style(typeof(System.Windows.Controls.Primitives.CalendarDayButton));
+                dayStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Primitives.CalendarDayButton.ForegroundProperty, dayFg));
+                dayStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Primitives.CalendarDayButton.BackgroundProperty, System.Windows.Media.Brushes.Transparent));
+                var hoverTrig = new Trigger { Property = System.Windows.UIElement.IsMouseOverProperty, Value = true };
+                hoverTrig.Setters.Add(new Setter(System.Windows.Controls.Primitives.CalendarDayButton.BackgroundProperty, dayHov));
+                dayStyle.Triggers.Add(hoverTrig);
+                cal.CalendarDayButtonStyle = dayStyle;
+
+                var calBtnStyle = new System.Windows.Style(typeof(System.Windows.Controls.Primitives.CalendarButton));
+                calBtnStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Primitives.CalendarButton.ForegroundProperty, dayFg));
+                calBtnStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Primitives.CalendarButton.BackgroundProperty, themeBg));
+                cal.CalendarButtonStyle = calBtnStyle;
+            }
+            ApplyCalDayStyle();
+
+            EventHandler themeHandler = (sender2, args2) => ApplyCalDayStyle();
+            ThemeManager.ThemeChanged += themeHandler;
+
+            var popupBorder = new Border { BorderThickness = new Thickness(1), Padding = new Thickness(2) };
+            popupBorder.SetResourceReference(Border.BackgroundProperty, "ContextMenuBackgroundBrush");
+            popupBorder.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+            popupBorder.Child = cal;
+
+            var popup = new System.Windows.Controls.Primitives.Popup
+            {
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse,
+                StaysOpen = true,
+                AllowsTransparency = true,
+                Child = popupBorder
+            };
+
+            cal.SelectedDatesChanged += (sender2, args2) =>
+            {
+                if (cal.SelectedDate.HasValue)
+                {
+                    selected = cal.SelectedDate;
+                    txt.Text = cal.SelectedDate.Value.ToString("yy-MM-dd");
+                    popup.IsOpen = false;
+                    onChanged();
+                }
+            };
+
+            // 바깥 클릭 시 닫기: 창 레벨 PreviewMouseDown 감지
+            MouseButtonEventHandler? winMouseDown = null;
+            winMouseDown = (sender2, args2) =>
+            {
+                if (!popup.IsOpen) return;
+                // 클릭 대상이 popup 내부인지 확인 (OriginalSource를 타고 올라가서 체크)
+                var src = args2.OriginalSource as DependencyObject;
+                while (src != null)
+                {
+                    if (src == popupBorder || src == btn) return; // 팝업 내부 또는 버튼 → 닫지 않음
+                    src = VisualTreeHelper.GetParent(src);
+                }
+                popup.IsOpen = false;
+            };
+
+            EventHandler? winStateChanged = null;
+            System.ComponentModel.CancelEventHandler? winClosing = null;
+            DependencyPropertyChangedEventHandler? winVisibleChanged = null;
+
+            btn.Loaded += (sender2, args2) =>
+            {
+                if (System.Windows.Window.GetWindow(btn) is System.Windows.Window win)
+                {
+                    win.PreviewMouseDown += winMouseDown;
+                    winStateChanged = (s, e) =>
+                    {
+                        if ((s as System.Windows.Window)?.WindowState == WindowState.Minimized)
+                            popup.IsOpen = false;
+                    };
+                    winClosing      = (s, e) => popup.IsOpen = false;
+                    winVisibleChanged = (s, e) => { if (!(bool)e.NewValue) popup.IsOpen = false; };
+                    win.StateChanged     += winStateChanged;
+                    win.Closing          += winClosing;
+                    win.IsVisibleChanged += winVisibleChanged;
+                }
+            };
+            btn.Unloaded += (sender2, args2) =>
+            {
+                if (System.Windows.Window.GetWindow(btn) is System.Windows.Window win)
+                {
+                    win.PreviewMouseDown -= winMouseDown;
+                    if (winStateChanged   != null) win.StateChanged     -= winStateChanged;
+                    if (winClosing        != null) win.Closing          -= winClosing;
+                    if (winVisibleChanged != null) win.IsVisibleChanged -= winVisibleChanged;
+                }
+                ThemeManager.ThemeChanged -= themeHandler;
+            };
+
+            btn.MouseLeftButtonDown += (sender2, args2) =>
+            {
+                popup.IsOpen = !popup.IsOpen;
+                args2.Handled = true;
+            };
+
+            return (btn, () => selected);
+        }
+
+        private static CartesianChart? GetInnerChartFromChild(UIElement? child)
+        {
+            if (child is System.Windows.Controls.ScrollViewer sv && sv.Content is CartesianChart c) return c;
+            if (child is CartesianChart dc) return dc;
+            if (child is Grid g)
+            {
+                foreach (var fe in g.Children.OfType<FrameworkElement>())
+                {
+                    if (fe is System.Windows.Controls.ScrollViewer svC && svC.Content is CartesianChart cC) return cC;
+                    if (fe is CartesianChart dcC) return dcC;
+                }
+            }
+            return null;
+        }
+
+        private void ApplyInnerChartHeight(CartesianChart chart, ChartMeta meta)
+        {
+            if (meta.InnerHeight <= 0) return;
+            chart.Height = meta.InnerHeight;
+            int count = Math.Max(1, meta.Labels.Count > 0 ? meta.Labels.Count : meta.StaticData.Count);
+            if (meta.ChartType == "HBar")
+            {
+                double naturalH = Math.Max(200, count * 38 + 60);
+                if (chart.YAxes?.FirstOrDefault() is LiveChartsCore.SkiaSharpView.Axis yAxis)
+                    yAxis.TextSize = (float)Math.Clamp(18.0 * (meta.InnerHeight / naturalH), 10.0, 32.0);
+            }
+            else if (meta.ChartType == "Bar")
+            {
+                double naturalH = Math.Max(300, count * 40 + 80);
+                if (chart.XAxes?.FirstOrDefault() is LiveChartsCore.SkiaSharpView.Axis xAxis)
+                    xAxis.TextSize = (float)Math.Clamp(22.0 * (meta.InnerHeight / naturalH), 14.0, 36.0);
+            }
+        }
+
+        private void AttachChartClickDetails(CartesianChart chart, ChartMeta meta)
+        {
+            var detailText = new System.Windows.Controls.TextBlock
+            {
+                FontSize = 13,
+                TextAlignment = TextAlignment.Center,
+                LineHeight = 20
+            };
+            detailText.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+
+            var detailBorder = new Border
+            {
+                Child = detailText,
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(14, 9, 14, 9),
+                BorderThickness = new Thickness(1)
+            };
+            detailBorder.SetResourceReference(Border.BackgroundProperty, "ContextMenuBackgroundBrush");
+            detailBorder.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+
+            var popup = new System.Windows.Controls.Primitives.Popup
+            {
+                Child = detailBorder,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse,
+                PlacementTarget = chart
+            };
+
+            chart.DataPointerDown += (_, points) =>
+            {
+                var pt = points?.FirstOrDefault();
+                if (pt == null) return;
+
+                string label;
+                double val;
+                if (meta.ChartType == "HBar")
+                {
+                    int idx = (int)Math.Round(pt.Coordinate.PrimaryValue);
+                    val = pt.Coordinate.SecondaryValue;
+                    var rev = meta.Labels.AsEnumerable().Reverse().ToList();
+                    label = idx >= 0 && idx < rev.Count ? rev[idx] : (idx + 1).ToString();
+                }
+                else
+                {
+                    int idx = (int)Math.Round(pt.Coordinate.SecondaryValue);
+                    val = pt.Coordinate.PrimaryValue;
+                    label = idx >= 0 && idx < meta.Labels.Count ? meta.Labels[idx] : (idx + 1).ToString();
+                }
+
+                double total = meta.StaticData.Sum();
+                string pct = total > 0 ? $"\n{val / total:P1}" : "";
+                detailText.Text = $"{label}\n{val:N0}{pct}";
+                popup.IsOpen = false;
+                popup.IsOpen = true;
+            };
+
+            System.Windows.Point clickPos = new();
+            chart.DataPointerDown += (_, __) => { clickPos = Mouse.GetPosition(chart); };
+            chart.MouseMove += (_, e) =>
+            {
+                if (!popup.IsOpen) return;
+                var pos = e.GetPosition(chart);
+                if (Math.Abs(pos.X - clickPos.X) > 15 || Math.Abs(pos.Y - clickPos.Y) > 15)
+                    popup.IsOpen = false;
+            };
+        }
+
         private void SaveAllChartStates()
         {
             // 차트 상태 저장 로직 (버튼 상태 저장과 유사)
@@ -3521,7 +4331,11 @@ ORDER BY 값 {sortDir}";
                             DbGroupBy = meta.DbGroupBy,
                             DbSortAscending = meta.DbSortAscending,
                             DbMiddleCategoryFilter = meta.DbMiddleCategoryFilter,
-                            DbMenuNameFilter = meta.DbMenuNameFilter
+                            DbMenuNameFilter = meta.DbMenuNameFilter,
+                            InnerHeight = meta.InnerHeight,
+                            ChartFont = meta.ChartFont,
+                            ChartLabelColor = meta.ChartLabelColor,
+                            ChartLabelSize = meta.ChartLabelSize
                         };
                         allCharts.Add(chartData);
                     }
@@ -3567,7 +4381,11 @@ ORDER BY 값 {sortDir}";
                         DbGroupBy = chartData.ContainsKey("DbGroupBy") ? chartData["DbGroupBy"]?.ToString() ?? "매장명" : "매장명",
                         DbSortAscending = chartData.ContainsKey("DbSortAscending") && Convert.ToBoolean(chartData["DbSortAscending"]),
                         DbMiddleCategoryFilter = chartData.ContainsKey("DbMiddleCategoryFilter") ? chartData["DbMiddleCategoryFilter"]?.ToString() : null,
-                        DbMenuNameFilter = chartData.ContainsKey("DbMenuNameFilter") ? chartData["DbMenuNameFilter"]?.ToString() : null
+                        DbMenuNameFilter = chartData.ContainsKey("DbMenuNameFilter") ? chartData["DbMenuNameFilter"]?.ToString() : null,
+                        InnerHeight = chartData.ContainsKey("InnerHeight") ? Convert.ToDouble(chartData["InnerHeight"]) : 0,
+                        ChartFont = chartData.ContainsKey("ChartFont") && chartData["ChartFont"] != null ? chartData["ChartFont"].ToString() : "Malgun Gothic",
+                        ChartLabelColor = chartData.ContainsKey("ChartLabelColor") ? chartData["ChartLabelColor"]?.ToString() : null,
+                        ChartLabelSize = chartData.ContainsKey("ChartLabelSize") ? Convert.ToDouble(chartData["ChartLabelSize"]) : 0
                     };
 
                     // StaticData 복원
@@ -3627,7 +4445,11 @@ ORDER BY 값 {sortDir}";
                     {
                         if (chartControl is System.Windows.Controls.Control ctrl2)
                             ctrl2.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
-                        border.Child = chartControl;
+                        if (meta.InnerHeight > 0 &&
+                            chartControl is System.Windows.Controls.ScrollViewer svRestore &&
+                            svRestore.Content is CartesianChart ccRestore)
+                            ApplyInnerChartHeight(ccRestore, meta);
+                        border.Child = WrapWithDbDates(chartControl, meta);
                     }
 
                     // 컨텍스트 메뉴 추가
@@ -3783,19 +4605,83 @@ ORDER BY 값 {sortDir}";
                         b.Cursor = System.Windows.Input.Cursors.Hand;
                         break;
                     case System.Windows.Controls.TextBox tb:
-                        tb.Background = buttonBg;
-                        tb.Foreground = fgBrush;
-                        tb.BorderBrush = (res["StatusBarBorderBrush"] as System.Windows.Media.Brush)
-                                         ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 85, 85));
-                        tb.CaretBrush = fgBrush;
+                        if (tb is System.Windows.Controls.Primitives.DatePickerTextBox)
+                        {
+                            var wBg = System.Windows.Media.Brushes.White;
+                            var wFg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30));
+                            tb.Background = wBg;
+                            tb.Foreground = wFg;
+                            tb.CaretBrush = wFg;
+                            tb.BorderThickness = new System.Windows.Thickness(0);
+                        }
+                        else
+                        {
+                            tb.Background = buttonBg;
+                            tb.Foreground = fgBrush;
+                            tb.BorderBrush = (res["StatusBarBorderBrush"] as System.Windows.Media.Brush)
+                                             ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 85, 85));
+                            tb.CaretBrush = fgBrush;
+                        }
                         break;
                     case System.Windows.Controls.TextBlock t:
                         t.Foreground = fgBrush;
                         break;
                     case System.Windows.Controls.ComboBox cb:
-                        cb.Background = buttonBg;
-                        cb.Foreground = System.Windows.Media.Brushes.Black;
-                        cb.BorderThickness = new System.Windows.Thickness(0);
+                        // 항상 흰 배경 + 어두운 글씨로 고정 (테마 무관)
+                        var cbBg  = System.Windows.Media.Brushes.White;
+                        var cbFg  = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30));
+                        var cbHov = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(220, 235, 255));
+                        cb.Background = cbBg;
+                        cb.Foreground = cbFg;
+                        cb.BorderThickness = new System.Windows.Thickness(1);
+                        cb.BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 180, 180));
+                        cb.Resources[System.Windows.SystemColors.WindowBrushKey]       = cbBg;
+                        cb.Resources[System.Windows.SystemColors.WindowTextBrushKey]    = cbFg;
+                        cb.Resources[System.Windows.SystemColors.HighlightBrushKey]     = cbHov;
+                        cb.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = cbFg;
+                        if (cb.ItemContainerStyle == null)
+                        {
+                            var itemStyle = new System.Windows.Style(typeof(System.Windows.Controls.ComboBoxItem));
+                            itemStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.ComboBoxItem.BackgroundProperty, cbBg));
+                            itemStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.ComboBoxItem.ForegroundProperty, cbFg));
+                            cb.ItemContainerStyle = itemStyle;
+                        }
+                        break;
+                    case System.Windows.Controls.DatePicker dp:
+                        // 항상 흰 배경 + 어두운 글씨로 고정 (테마 무관)
+                        var dpBg  = System.Windows.Media.Brushes.White;
+                        var dpFg  = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30));
+                        var dpHov = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(220, 235, 255));
+                        dp.Background = dpBg;
+                        dp.Foreground = dpFg;
+                        dp.BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 180, 180));
+                        dp.Resources[System.Windows.SystemColors.WindowBrushKey]       = dpBg;
+                        dp.Resources[System.Windows.SystemColors.WindowTextBrushKey]    = dpFg;
+                        dp.Resources[System.Windows.SystemColors.HighlightBrushKey]     = dpHov;
+                        dp.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = dpFg;
+                        dp.Resources[System.Windows.SystemColors.ControlBrushKey]       = dpBg;
+                        dp.Resources[System.Windows.SystemColors.ControlTextBrushKey]   = dpFg;
+                        var calStyle = new System.Windows.Style(typeof(System.Windows.Controls.Calendar));
+                        calStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Calendar.BackgroundProperty, dpBg));
+                        calStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Calendar.ForegroundProperty, dpFg));
+                        calStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Calendar.BorderBrushProperty,
+                            new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 180, 180))));
+                        calStyle.Setters.Add(new System.Windows.Setter(System.Windows.Controls.Calendar.BorderThicknessProperty, new System.Windows.Thickness(1)));
+                        dp.CalendarStyle = calStyle;
+                        void ApplyDpTextBox()
+                        {
+                            if (dp.Template?.FindName("PART_TextBox", dp) is System.Windows.Controls.Primitives.DatePickerTextBox dpTb)
+                            {
+                                dpTb.Background = dpBg;
+                                dpTb.Foreground = dpFg;
+                                dpTb.CaretBrush = dpFg;
+                                dpTb.BorderThickness = new System.Windows.Thickness(0);
+                                dpTb.Resources[System.Windows.SystemColors.WindowBrushKey]     = dpBg;
+                                dpTb.Resources[System.Windows.SystemColors.WindowTextBrushKey] = dpFg;
+                            }
+                        }
+                        if (dp.IsLoaded) ApplyDpTextBox();
+                        else dp.Loaded += (_, __) => ApplyDpTextBox();
                         break;
                     case System.Windows.Controls.ListBox lb:
                         lb.Background = buttonBg;

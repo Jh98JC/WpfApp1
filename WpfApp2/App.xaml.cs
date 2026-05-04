@@ -36,6 +36,9 @@ namespace WpfApp2
 
             base.OnStartup(e);
 
+            // Azure SQL 설정 로드
+            DatabaseService.LoadConfig();
+
             // 업데이트 완료 플래그 확인
             CheckUpdateCompletedFlag();
 
@@ -87,22 +90,50 @@ namespace WpfApp2
             // AutoUpdater 시작 - 업데이트 확인 (동기)
             AutoUpdater.Start(updateUrl);
 
-            // 스플래시 1초 후 닫고 MainWindow 표시
-            Task.Run(async () =>
+            // 스플래시 1초 후 닫고 로그인 창 표시
+            _ = Task.Run(async () =>
             {
-                await Task.Delay(1000);
-                Dispatcher.Invoke(() =>
+                try
                 {
-                    splashWindow?.Close();
-                    splashWindow = null;
-
-                    // AutoUpdater.Start()가 완료되었으므로 MainWindow 표시
-                    if (mainWindow != null && !mainWindow.IsVisible)
+                    await Task.Delay(1000);
+                    Dispatcher.Invoke(() =>
                     {
-                        mainWindow.Show();
-                    }
-                });
+                        splashWindow?.Close();
+                        splashWindow = null;
+                        ShowLoginAndProceed();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SplashTask] {ex.Message}");
+                    Dispatcher.Invoke(ShowLoginAndProceed);
+                }
             });
+        }
+
+        private void ShowLoginAndProceed()
+        {
+            try
+            {
+                var loginWin = new LoginWindow { WindowStartupLocation = WindowStartupLocation.CenterScreen };
+                if (loginWin.ShowDialog() != true)
+                {
+                    Shutdown();
+                    return;
+                }
+
+                // 로그인 성공 → MainWindow 표시
+                mainWindow?.ApplyRoleVisibility();
+                if (mainWindow != null && !mainWindow.IsVisible)
+                    mainWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(
+                    $"초기화 오류:\n{ex.Message}",
+                    "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown();
+            }
         }
 
         private void CheckUpdateCompletedFlag()
@@ -129,30 +160,28 @@ namespace WpfApp2
                     System.Diagnostics.Debug.WriteLine("플래그 파일 삭제됨");
 
                     // MainWindow가 표시된 후 변경내용 창 표시
-                    Task.Run(async () =>
+                    _ = Task.Run(async () =>
                     {
-                        await Task.Delay(1500); // MainWindow 표시 후 1.5초 대기
-                        Dispatcher.Invoke(() =>
+                        try
                         {
-                            System.Diagnostics.Debug.WriteLine($"ChangelogWindow 표시 시도");
-                            System.Diagnostics.Debug.WriteLine($"mainWindow null? {mainWindow == null}");
-                            System.Diagnostics.Debug.WriteLine($"mainWindow.IsVisible? {mainWindow?.IsVisible}");
-
-                            if (mainWindow != null && mainWindow.IsVisible)
+                            await Task.Delay(1500);
+                            Dispatcher.Invoke(() =>
                             {
-                                System.Diagnostics.Debug.WriteLine($"ChangelogWindow 생성 - 버전: {versionInfo}, URL: {changelogUrl}");
-                                var changelogWindow = new ChangelogWindow(versionInfo, null, changelogUrl)
+                                if (mainWindow != null && mainWindow.IsVisible)
                                 {
-                                    Owner = mainWindow,
-                                    WindowStartupLocation = WindowStartupLocation.CenterOwner
-                                };
-                                changelogWindow.ShowDialog();
-                            }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine("MainWindow가 보이지 않아 ChangelogWindow 표시 안 함");
-                            }
-                        });
+                                    var changelogWindow = new ChangelogWindow(versionInfo, null, changelogUrl)
+                                    {
+                                        Owner = mainWindow,
+                                        WindowStartupLocation = WindowStartupLocation.CenterOwner
+                                    };
+                                    changelogWindow.ShowDialog();
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ChangelogTask] {ex.Message}");
+                        }
                     });
                 }
             }

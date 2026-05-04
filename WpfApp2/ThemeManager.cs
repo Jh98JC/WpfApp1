@@ -43,7 +43,7 @@ namespace WpfApp2
                 }
             }
             catch { }
-            Apply(Theme.Purple);
+            Apply(Theme.White);
         }
 
         // ── helpers ───────────────────────────────────────────────────────────

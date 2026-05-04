@@ -42,6 +42,10 @@ namespace WpfApp2
             }
         }
 
+        private static bool IsAllowedUrl(string url) =>
+            Uri.TryCreate(url, UriKind.Absolute, out var u) &&
+            (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp);
+
         private async void LoadChangelogFromUrl(string url)
         {
             try
@@ -56,6 +60,7 @@ namespace WpfApp2
 
                 using (var client = new System.Net.Http.HttpClient())
                 {
+                    client.Timeout = TimeSpan.FromSeconds(10);
                     client.DefaultRequestHeaders.Add("User-Agent", "WpfApp2-Updater");
                     var jsonResponse = await client.GetStringAsync(apiUrl);
 
@@ -102,6 +107,11 @@ namespace WpfApp2
         {
             if (!string.IsNullOrEmpty(changelogUrl))
             {
+                if (!IsAllowedUrl(changelogUrl))
+                {
+                    System.Windows.MessageBox.Show("허용되지 않은 URL 형식입니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
                 try
                 {
                     Process.Start(new ProcessStartInfo

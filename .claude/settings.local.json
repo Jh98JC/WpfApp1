@@ -15,7 +15,9 @@
       "PowerShell(Get-Command *)",
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\amd64\\\\MSBuild.exe\" \"C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\대진포스 쿼리\\\\대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo /v:minimal 2>&1 | Select-Object -Last 5)",
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\amd64\\\\MSBuild.exe\" \"C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\대진포스 쿼리\\\\대진포스 쿼리.csproj\" /p:Configuration=Debug /nologo /v:minimal 2>&1 | Where-Object { $_ -match \"error|warning CS|->|오류\" } | Select-Object -Last 15)",
-      "Bash(sqlcmd *)"
+      "Bash(sqlcmd *)",
+      "Bash(dotnet add *)",
+      "Bash(grep -n \"SqlCommand.*\\\\$\\\\|SqlCommand.*Format\\\\|SqlCommand.*Concat\" \"C:\\\\권지훈\\\\1. 개인자료\\\\Visual Studio\\\\WpfApp1\\\\WpfApp2\\\\MainWindow.xaml.cs\")"
     ]
   }
 }

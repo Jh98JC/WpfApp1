@@ -2,14 +2,45 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.IO;
 using System.Linq;
 
 namespace 대진포스_쿼리
 {
     public static class DbSaver
     {
-        public const string ConnectionString =
-            "Server=localhost\\SQLEXPRESS;Database=대진포스DB;Integrated Security=True;";
+        private static readonly string ConfigFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "대진포스쿼리");
+        private static readonly string ConfigFile = Path.Combine(ConfigFolder, "db_config.txt");
+
+        private static string _connectionString = string.Empty;
+        public static string ConnectionString
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_connectionString)) LoadConfig();
+                return _connectionString;
+            }
+        }
+
+        public static bool IsConfigured => !string.IsNullOrWhiteSpace(ConnectionString);
+
+        public static void LoadConfig()
+        {
+            try
+            {
+                if (File.Exists(ConfigFile))
+                    _connectionString = File.ReadAllText(ConfigFile).Trim();
+            }
+            catch { }
+        }
+
+        public static void SaveConfig(string connectionString)
+        {
+            Directory.CreateDirectory(ConfigFolder);
+            File.WriteAllText(ConfigFile, connectionString.Trim());
+            _connectionString = connectionString.Trim();
+        }
 
         /// <summary>
         /// _allAccountsData (탭 구분 행 목록)를 DB에 저장합니다.

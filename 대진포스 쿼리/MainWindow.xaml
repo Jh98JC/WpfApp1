@@ -21,6 +21,7 @@
                 <Button x:Name="AutoLoginAndCollectButton" Content="🚀 날짜 설정 후 자동 수집" Width="180" Height="35" Click="AutoLoginAndCollectButton_Click" Margin="0,0,10,0" Background="LimeGreen" FontWeight="Bold" FontSize="13"/>
                 <Button x:Name="LoginOnlyButton" Content="🔑 로그인만" Width="100" Height="35" Click="LoginOnlyButton_Click" Margin="0,0,10,0" Background="LightGreen"/>
                 <Button x:Name="StopAutoCollectButton" Content="⏹ 중지" Width="80" Height="35" Click="StopAutoCollectButton_Click" Margin="0,0,10,0" IsEnabled="False" Background="IndianRed"/>
+                <Button x:Name="DbSettingsButton" Content="⚙️ DB 설정" Width="100" Height="35" Click="DbSettingsButton_Click" Margin="0,0,0,0" Background="#607D8B" Foreground="White" FontWeight="Bold"/>
             </StackPanel>
         </StackPanel>
 

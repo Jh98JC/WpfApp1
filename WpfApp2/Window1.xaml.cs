@@ -32,6 +32,32 @@ namespace WpfApp2
                 versionText.Text = $"v{version.Major}.{version.Minor}.{version.Build}";
 
             BuildThemeCards();
+
+            // 마스터 계정만 DB 설정 버튼 표시
+            dbConfigBtn.Visibility = Session.IsMaster ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void dbConfigBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var win = new DbConfigWindow { Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            win.ShowDialog();
+        }
+
+        private void logoutBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var result = System.Windows.MessageBox.Show(
+                "로그아웃 하시겠습니까?", "로그아웃",
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+
+            AutoLoginService.Clear();
+            Session.Clear();
+
+            var main = Owner as MainWindow;
+            Close(); // Setting 창 먼저 닫기
+
+            if (main != null)
+                main.DoLogout();
         }
 
         // ── 테마 카드 ─────────────────────────────────────────────────────────
