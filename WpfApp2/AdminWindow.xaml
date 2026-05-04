@@ -116,8 +116,8 @@
                                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="45" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="사용자명" Binding="{Binding Username}" Width="130" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="이름" Binding="{Binding DisplayName}" Width="130" IsReadOnly="True"/>
-                                <DataGridTextColumn Header="역할" Binding="{Binding Role}" Width="70" IsReadOnly="True"/>
-                                <DataGridTextColumn Header="가입일" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd}" Width="100" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="역할" Binding="{Binding Role}" Width="80" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="가입일" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd}" Width="110" IsReadOnly="True"/>
                                 <DataGridTemplateColumn Header="관리" Width="*" IsReadOnly="True">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
@@ -187,7 +187,7 @@
                                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="45" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="사용자명" Binding="{Binding Username}" Width="140" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="이름" Binding="{Binding DisplayName}" Width="130" IsReadOnly="True"/>
-                                <DataGridTextColumn Header="신청일" Binding="{Binding RequestedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="130" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="신청일" Binding="{Binding RequestedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="150" IsReadOnly="True"/>
                                 <DataGridTextColumn Header="상태" Binding="{Binding ProcessedStatus, FallbackValue=대기중}"
                                                     Width="*" IsReadOnly="True"/>
                             </DataGrid.Columns>

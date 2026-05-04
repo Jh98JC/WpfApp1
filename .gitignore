@@ -327,6 +327,21 @@ paket-files/
 __pycache__/
 *.pyc
 
+# WpfApp2 runtime state files (machine-specific, do not share)
+button_states.json
+mainwindow_settings.json
+tab_states.json
+chart_states.json
+window3_position.json
+update_debug.log
+update_error.log
+update_completed.flag
+db_config.dat
+*.dat
+
+# Claude Code local settings
+.claude/settings.local.json
+
 # Cake - Uncomment if you are using it
 # tools/**
 # !tools/packages.config

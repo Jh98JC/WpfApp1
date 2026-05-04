@@ -129,7 +129,8 @@ namespace WpfApp2
             }
             catch (Exception ex)
             {
-                SetStatus($"연결 오류: {ex.Message}", false);
+                System.Diagnostics.Debug.WriteLine($"[Login] {ex.Message}");
+                SetStatus("서버에 연결할 수 없습니다.", false);
             }
 
             LoginBtn.IsEnabled = true;
