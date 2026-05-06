@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -45,13 +46,37 @@ namespace WpfApp2.Updater
             StatusText.Text = "설치 중...";
             try
             {
-                var psi = new ProcessStartInfo(_installerPath)
+                string ext = System.IO.Path.GetExtension(_installerPath).ToLowerInvariant();
+                if (ext == ".zip")
                 {
-                    Arguments = _silentArgs,
-                    UseShellExecute = true
-                };
-                var installer = Process.Start(psi);
-                await Task.Run(() => installer?.WaitForExit());
+                    string installDir = !string.IsNullOrEmpty(_appPath)
+                        ? System.IO.Path.GetDirectoryName(_appPath)!
+                        : AppDomain.CurrentDomain.BaseDirectory;
+                    await Task.Run(() =>
+                    {
+                        using var zip = System.IO.Compression.ZipFile.OpenRead(_installerPath);
+                        foreach (var entry in zip.Entries)
+                        {
+                            if (string.IsNullOrEmpty(entry.Name)) continue;
+                            string destPath = System.IO.Path.Combine(installDir, entry.FullName);
+                            string? destDir = System.IO.Path.GetDirectoryName(destPath);
+                            if (!string.IsNullOrEmpty(destDir))
+                                System.IO.Directory.CreateDirectory(destDir);
+                            try { entry.ExtractToFile(destPath, overwrite: true); }
+                            catch (System.IO.IOException) { /* 실행 중인 파일은 건너뜀 */ }
+                        }
+                    });
+                }
+                else
+                {
+                    var psi = new ProcessStartInfo(_installerPath)
+                    {
+                        Arguments = _silentArgs,
+                        UseShellExecute = true
+                    };
+                    var installer = Process.Start(psi);
+                    await Task.Run(() => installer?.WaitForExit());
+                }
             }
             catch (Exception ex)
             {
