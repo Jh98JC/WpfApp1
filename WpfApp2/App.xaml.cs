@@ -239,12 +239,39 @@ namespace WpfApp2
 
             try
             {
-                string args = DetectSilentArgs(tempFilePath);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tempFilePath)
+                string silentArgs = DetectSilentArgs(tempFilePath);
+                int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+                string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.Updater.exe");
+                if (File.Exists(updaterPath))
                 {
-                    UseShellExecute = true,
-                    Arguments = args
-                });
+                    // 별도 프로세스로 업데이터 실행 — 메인 앱 종료 후 인스톨러 실행
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(updaterPath)
+                    {
+                        Arguments = $"--install \"{tempFilePath}\" --pid {pid} --args \"{silentArgs}\" --version \"{pendingUpdateVersion ?? ""}\"",
+                        UseShellExecute = false
+                    });
+                }
+                else
+                {
+                    // 폴백: 배치 파일 방식
+                    string batchPath = Path.Combine(Path.GetTempPath(), "wpfapp2_update.bat");
+                    string batch =
+                        "@echo off\r\n" +
+                        "timeout /t 2 /nobreak >nul\r\n" +
+                        ":loop\r\n" +
+                        $"tasklist /fi \"pid eq {pid}\" /nh 2>nul | find /i \".exe\" >nul\r\n" +
+                        "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto loop)\r\n" +
+                        $"start \"\" \"{tempFilePath}\" {silentArgs}\r\n" +
+                        "del \"%~f0\"\r\n";
+                    File.WriteAllText(batchPath, batch);
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
+                    {
+                        Arguments = $"/c \"{batchPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                }
             }
             catch { }
 
@@ -255,7 +282,6 @@ namespace WpfApp2
         {
             try
             {
-                // 파일 내용에서 인스톨러 종류 감지
                 byte[] buf = new byte[65536];
                 using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
                 int read = fs.Read(buf, 0, buf.Length);
@@ -269,7 +295,6 @@ namespace WpfApp2
             }
             catch { }
 
-            // 감지 실패 시 NSIS 기본값 시도
             return "/S";
         }
 

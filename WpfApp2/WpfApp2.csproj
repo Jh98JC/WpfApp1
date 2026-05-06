@@ -7,15 +7,38 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <Version>1.3.0</Version>
-    <AssemblyVersion>1.3.0</AssemblyVersion>
-    <FileVersion>1.3.0</FileVersion>
+    <Version>1.3.1</Version>
+    <AssemblyVersion>1.3.1</AssemblyVersion>
+    <FileVersion>1.3.1</FileVersion>
     <ApplicationIcon>대시보드아이콘 3.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <Resource Include="대시보드아이콘 3.ico" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WpfApp2.Updater\WpfApp2.Updater.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- 일반 빌드 시: bin 폴더에 복사 -->
+  <Target Name="CopyUpdaterExe" AfterTargets="Build">
+    <Copy SourceFiles="..\WpfApp2.Updater\bin\$(Configuration)\net8.0-windows\WpfApp2.Updater.exe"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true"/>
+  </Target>
+
+  <!-- dotnet publish 시: publish 폴더에도 복사 -->
+  <Target Name="CopyUpdaterExeToPublish" AfterTargets="Publish">
+    <Copy SourceFiles="..\WpfApp2.Updater\bin\$(Configuration)\net8.0-windows\WpfApp2.Updater.exe"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true"/>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Anthropic.SDK" Version="5.10.0" />

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>..\WpfApp2\대시보드아이콘 3.ico</ApplicationIcon>
+    <AssemblyName>WpfApp2.Updater</AssemblyName>
+    <RootNamespace>WpfApp2.Updater</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="..\WpfApp2\대시보드아이콘 3.ico" Link="대시보드아이콘 3.ico" />
+  </ItemGroup>
+
+</Project>
