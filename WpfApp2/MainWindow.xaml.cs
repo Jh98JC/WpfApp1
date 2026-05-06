@@ -109,6 +109,24 @@ namespace WpfApp2
             SaveWindowPosition();
         }
 
+        private System.Drawing.Icon? LoadTrayIcon()
+        {
+            try
+            {
+                var sri = System.Windows.Application.GetResourceStream(
+                    new Uri("pack://application:,,,/대시보드아이콘 3.ico"));
+                if (sri != null)
+                {
+                    var ms = new System.IO.MemoryStream();
+                    sri.Stream.CopyTo(ms);
+                    ms.Position = 0;
+                    return new System.Drawing.Icon(ms);
+                }
+            }
+            catch { }
+            return null;
+        }
+
         // 핫키 설정 (기본값: Alt+`)
         private int _hotkeyVk = 0xC0;
         private bool _hotkeyAlt = true;
@@ -923,9 +941,10 @@ namespace WpfApp2
                 Opacity = 0,
             };
 
-            System.Drawing.Icon? appIcon = null;
-            try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Process.GetCurrentProcess().MainModule!.FileName); }
-            catch { appIcon = System.Drawing.SystemIcons.Application; }
+            System.Drawing.Icon? appIcon = LoadTrayIcon();
+            if (appIcon == null)
+                try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Process.GetCurrentProcess().MainModule!.FileName); }
+                catch { appIcon = System.Drawing.SystemIcons.Application; }
 
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("열기", null, (_, _) => Dispatcher.Invoke(ShowAndActivateMain));

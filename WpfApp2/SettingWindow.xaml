@@ -6,6 +6,7 @@
         mc:Ignorable="av"
         x:Class="WpfApp2.SettingWindow"
         Title="셋팅창" Height="560" Width="600"
+        Icon="/대시보드아이콘 3.ico"
         Background="Transparent"
         Foreground="{DynamicResource ForegroundBrush}"
         ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"

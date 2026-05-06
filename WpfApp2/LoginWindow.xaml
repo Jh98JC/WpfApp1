@@ -3,6 +3,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     x:Class="WpfApp2.LoginWindow"
     Title="로그인" Width="340"
+    Icon="/대시보드아이콘 3.ico"
     SizeToContent="Height"
     Background="Transparent"
     WindowStyle="None" AllowsTransparency="True"

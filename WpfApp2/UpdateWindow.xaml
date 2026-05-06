@@ -7,6 +7,7 @@
         mc:Ignorable="av"
         x:Class="WpfApp2.UpdateWindow"
         Title="업데이트" Height="450" Width="550"
+        Icon="/대시보드아이콘 3.ico"
         Background="Transparent"
         Foreground="White"
         ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"

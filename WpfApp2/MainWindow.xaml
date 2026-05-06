@@ -8,6 +8,7 @@
         mc:Ignorable="av"
         x:Class="WpfApp2.MainWindow"
         Title="MainWindow" Height="683" Width="1100"
+        Icon="/대시보드아이콘 3.ico"
         Background="Transparent"
         Foreground="{DynamicResource ForegroundBrush}"
         ResizeMode="CanResizeWithGrip" WindowStyle="None" AllowsTransparency="True">
