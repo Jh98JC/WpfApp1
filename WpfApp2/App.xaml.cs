@@ -243,41 +243,70 @@ namespace WpfApp2
 
             try
             {
-                string silentArgs = DetectSilentArgs(tempFilePath);
                 int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
                 string appPath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                string ext = Path.GetExtension(tempFilePath).ToLowerInvariant();
 
-                string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.Updater.exe");
-                if (File.Exists(updaterPath))
+                if (ext == ".zip")
                 {
-                    // 별도 프로세스로 업데이터 실행 — 메인 앱 종료 후 인스톨러 실행 후 앱 재시작
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(updaterPath)
+                    // ZIP: PowerShell로 압축 해제 후 앱 재시작 — 외부 업데이터 불필요
+                    string installDir = string.IsNullOrEmpty(appPath)
+                        ? AppDomain.CurrentDomain.BaseDirectory
+                        : Path.GetDirectoryName(appPath)!;
+                    string ps1Path = Path.Combine(Path.GetTempPath(), "wpfapp2_update.ps1");
+                    string ez = tempFilePath.Replace("'", "''");
+                    string ed = installDir.Replace("'", "''");
+                    string ea = appPath.Replace("'", "''");
+                    string ps1 =
+                        $"$p = {pid}\r\n" +
+                        $"while (Get-Process -Id $p -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\r\n" +
+                        $"Start-Sleep -Milliseconds 500\r\n" +
+                        $"Expand-Archive -Path '{ez}' -DestinationPath '{ed}' -Force\r\n" +
+                        $"Start-Sleep -Milliseconds 1000\r\n" +
+                        (string.IsNullOrEmpty(appPath) ? "" : $"Start-Process -FilePath '{ea}'\r\n") +
+                        $"Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue\r\n";
+                    File.WriteAllText(ps1Path, ps1);
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
                     {
-                        Arguments = $"--install \"{tempFilePath}\" --pid {pid} --args \"{silentArgs}\" --version \"{pendingUpdateVersion ?? ""}\" --apppath \"{appPath}\"",
-                        UseShellExecute = false
+                        Arguments = $"-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File \"{ps1Path}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                     });
                 }
                 else
                 {
-                    // 폴백: 배치 파일 방식
-                    string batchPath = Path.Combine(Path.GetTempPath(), "wpfapp2_update.bat");
-                    string batch =
-                        "@echo off\r\n" +
-                        "timeout /t 2 /nobreak >nul\r\n" +
-                        ":loop\r\n" +
-                        $"tasklist /fi \"pid eq {pid}\" /nh 2>nul | find /i \".exe\" >nul\r\n" +
-                        "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto loop)\r\n" +
-                        $"start \"\" \"{tempFilePath}\" {silentArgs}\r\n" +
-                        "timeout /t 3 /nobreak >nul\r\n" +
-                        $"start \"\" \"{appPath}\"\r\n" +
-                        "del \"%~f0\"\r\n";
-                    File.WriteAllText(batchPath, batch);
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
+                    // EXE 인스톨러: 외부 업데이터 또는 배치 파일 방식
+                    string silentArgs = DetectSilentArgs(tempFilePath);
+                    string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.Updater.exe");
+                    if (File.Exists(updaterPath))
                     {
-                        Arguments = $"/c \"{batchPath}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    });
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(updaterPath)
+                        {
+                            Arguments = $"--install \"{tempFilePath}\" --pid {pid} --args \"{silentArgs}\" --version \"{pendingUpdateVersion ?? ""}\" --apppath \"{appPath}\"",
+                            UseShellExecute = false
+                        });
+                    }
+                    else
+                    {
+                        string batchPath = Path.Combine(Path.GetTempPath(), "wpfapp2_update.bat");
+                        string batch =
+                            "@echo off\r\n" +
+                            "timeout /t 2 /nobreak >nul\r\n" +
+                            ":loop\r\n" +
+                            $"tasklist /fi \"pid eq {pid}\" /nh 2>nul | find /i \".exe\" >nul\r\n" +
+                            "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto loop)\r\n" +
+                            $"start \"\" \"{tempFilePath}\" {silentArgs}\r\n" +
+                            "timeout /t 3 /nobreak >nul\r\n" +
+                            $"start \"\" \"{appPath}\"\r\n" +
+                            "del \"%~f0\"\r\n";
+                        File.WriteAllText(batchPath, batch);
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
+                        {
+                            Arguments = $"/c \"{batchPath}\"",
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        });
+                    }
                 }
             }
             catch { }
