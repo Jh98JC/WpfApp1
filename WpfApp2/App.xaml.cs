@@ -17,9 +17,10 @@ namespace WpfApp2
         private SplashWindow? splashWindow;
         private static Mutex? mutex;
         private const string UpdateFlagFile = "update_completed.flag";
-        private MainWindow? mainWindow;  // 메인 윈도우 인스턴스 저장
-        private string? pendingUpdateVersion;  // 업데이트될 버전 저장
-        private string? pendingChangelogUrl;  // 업데이트 변경로그 URL 저장
+        private MainWindow? mainWindow;
+        private string? pendingUpdateVersion;
+        private string? pendingChangelogUrl;
+        private bool _updateInProgress = false;
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -101,6 +102,7 @@ namespace WpfApp2
                     await Task.Delay(1000);
                     Dispatcher.Invoke(() =>
                     {
+                        if (_updateInProgress) return;
                         splashWindow?.Close();
                         splashWindow = null;
                         ShowLoginAndProceed();
@@ -198,20 +200,49 @@ namespace WpfApp2
         {
             if (args?.IsUpdateAvailable != true) return;
 
+            _updateInProgress = true;
+
             Dispatcher.Invoke(() =>
             {
-                string current  = args.InstalledVersion?.ToString() ?? "알 수 없음";
-                string latest   = args.CurrentVersion  ?? "알 수 없음";
-                string changelog = pendingChangelogUrl  ?? "";
+                string current      = args.InstalledVersion?.ToString() ?? "알 수 없음";
+                string latest       = args.CurrentVersion  ?? "알 수 없음";
+                string changelog    = pendingChangelogUrl  ?? "";
+                string downloadUrl  = args.DownloadURL     ?? "";
 
-                var win = new UpdateWindow(current, latest, changelog)
+                var win = new UpdateWindow(current, latest, changelog, downloadUrl)
                 {
                     WindowStartupLocation = WindowStartupLocation.CenterScreen
                 };
 
-                if (win.ShowDialog() == true)
-                    AutoUpdater.DownloadUpdate(args);
+                win.ShowDialog(); // 사용자가 '나중에' 누르면 반환, 설치 시 프로세스 종료
+
+                // '나중에'로 취소한 경우 — 로그인 절차 진행
+                _updateInProgress = false;
+                splashWindow?.Close();
+                splashWindow = null;
+                ShowLoginAndProceed();
             });
+        }
+
+        internal void StartInstall(string tempFilePath)
+        {
+            try
+            {
+                string flagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UpdateFlagFile);
+                File.WriteAllText(flagPath, $"{pendingUpdateVersion ?? "Unknown"}|{pendingChangelogUrl ?? ""}");
+            }
+            catch { }
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tempFilePath)
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+
+            Environment.Exit(0);
         }
 
         private void AutoUpdater_ParseUpdateInfoEvent(ParseUpdateInfoEventArgs args)
