@@ -163,59 +163,69 @@
                         </ScrollViewer>
                     </Border>
 
-                    <!-- Progress Panel -->
-                    <TextBlock x:Name="ProgressPanel"
-                               Visibility="Collapsed"
-                               Margin="0,15,0,0"
-                               FontSize="13"
-                               Foreground="#FF4CAF50"/>
-                    <!-- ProgressBar는 코드 호환용으로만 유지 -->
-                    <ProgressBar x:Name="DownloadProgressBar"
-                                Visibility="Collapsed"
-                                Minimum="0" Maximum="100" Value="0"/>
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- Footer Buttons -->
-            <Border Grid.Row="2" 
+            <!-- Footer -->
+            <Border Grid.Row="2"
                     Background="#FF2D2D30"
                     CornerRadius="0,0,10,10"
                     Padding="20,15">
-                <StackPanel Orientation="Horizontal" 
-                           HorizontalAlignment="Right">
-                    <!-- Close/Skip Button -->
-                    <Button x:Name="CloseButton"
-                            Content="나중에"
-                            Click="CloseButton_Click"
-                            Style="{StaticResource MaterialDesignFlatButton}"
-                            Width="100"
-                            Height="36"
-                            Margin="0,0,10,0"
-                            Foreground="#FFAAAAAA"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                    <!-- Update Button -->
-                    <Button x:Name="UpdateButton"
-                            Content="업데이트"
-                            Click="UpdateButton_Click"
-                            Width="120"
-                            Height="36"
-                            Visibility="Collapsed"
-                            Foreground="White"
-                            FontWeight="SemiBold">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
-                                <Setter Property="Background" Value="#FF4CAF50"/>
-                                <Setter Property="BorderBrush" Value="#FF4CAF50"/>
-                                <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="5"/>
-                                <Style.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Background" Value="#FF45A049"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                </StackPanel>
+                    <!-- 진행 상태 (왼쪽) -->
+                    <StackPanel x:Name="FooterProgressPanel"
+                                Grid.Column="0"
+                                VerticalAlignment="Center"
+                                Margin="0,0,15,0"
+                                Visibility="Collapsed">
+                        <TextBlock x:Name="FooterProgressText"
+                                   Foreground="#FF4CAF50"
+                                   FontSize="12"
+                                   Margin="0,0,0,5"/>
+                        <ProgressBar x:Name="DownloadProgressBar"
+                                     Minimum="0" Maximum="100" Value="0"
+                                     Height="6"
+                                     Foreground="#FF4CAF50"/>
+                    </StackPanel>
+
+                    <!-- 버튼 (오른쪽) -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="CloseButton"
+                                Content="나중에"
+                                Click="CloseButton_Click"
+                                Style="{StaticResource MaterialDesignFlatButton}"
+                                Width="100"
+                                Height="36"
+                                Margin="0,0,10,0"
+                                Foreground="#FFAAAAAA"/>
+                        <Button x:Name="UpdateButton"
+                                Content="업데이트"
+                                Click="UpdateButton_Click"
+                                Width="120"
+                                Height="36"
+                                Visibility="Collapsed"
+                                Foreground="White"
+                                FontWeight="SemiBold">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+                                    <Setter Property="Background" Value="#FF4CAF50"/>
+                                    <Setter Property="BorderBrush" Value="#FF4CAF50"/>
+                                    <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="5"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="#FF45A049"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
     </Border>

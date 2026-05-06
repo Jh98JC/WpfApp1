@@ -166,12 +166,7 @@
                                     Background="{DynamicResource ContextMenuBorderBrush}"
                                     Foreground="{DynamicResource ForegroundBrush}"
                                     BorderBrush="{DynamicResource StatusBarBorderBrush}"
-                                    Margin="0,0,8,0"
                                     Click="logoutBtn_Click"/>
-                            <Button x:Name="clear" Content="버튼 초기화" Width="88" Height="28" FontSize="12"
-                                    Background="#4D2B2B" Foreground="#FFAAAA"
-                                    BorderBrush="#6B3333" FontWeight="Bold"
-                                    Click="clear_Click"/>
                         </StackPanel>
                     </Grid>
 

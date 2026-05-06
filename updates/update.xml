@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
-  <version>1.3.6</version>
-  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.3.6/WpfApp2-v1.3.6.zip</url>
-  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.3.6</changelog>
+  <version>1.3.7</version>
+  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.3.7/WpfApp2-v1.3.7.zip</url>
+  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.3.7</changelog>
   <releaseNotes>- 업데이터 테스트</releaseNotes>
   <mandatory>true</mandatory>
 </item>

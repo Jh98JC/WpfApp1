@@ -54,11 +54,9 @@ namespace WpfApp2
             CloseButton.IsEnabled = false;
             HeaderCloseButton.IsEnabled = false;
 
-            // 체인지로그 숨기고 프로그레스 영역 확보
-            ChangelogBorder.Visibility = Visibility.Collapsed;
-            VersionPanel.Visibility = Visibility.Collapsed;
-            ProgressPanel.Visibility = Visibility.Visible;
             StatusText.Text = "업데이트 중...";
+            FooterProgressPanel.Visibility = Visibility.Visible;
+            FooterProgressText.Text = "다운로드 중... 0%";
 
             _cts = new CancellationTokenSource();
             try
@@ -66,18 +64,16 @@ namespace WpfApp2
                 var progress = new Progress<int>(pct =>
                 {
                     DownloadProgressBar.Value = pct;
-                    string bar = new string('█', pct / 10) + new string('░', 10 - pct / 10);
-                    ProgressPanel.Text = $"다운로드 중... {bar} {pct}%";
+                    FooterProgressText.Text = $"다운로드 중... {pct}%";
                 });
 
                 string tempFile = await DownloadFileAsync(_downloadUrl, progress, _cts.Token);
 
-                // 100% 확정 표시 후 UI가 렌더링될 시간을 줌
                 DownloadProgressBar.Value = 100;
-                ProgressPanel.Text = "다운로드 중... ██████████ 100%";
+                FooterProgressText.Text = "다운로드 완료, 설치 중...";
                 await Task.Delay(600);
 
-                ProgressPanel.Text = "설치 파일 실행 중... 잠시 후 앱이 종료됩니다.";
+                FooterProgressText.Text = "잠시 후 앱이 종료됩니다.";
                 await Task.Delay(1000);
 
                 if (System.Windows.Application.Current is App app)
@@ -87,7 +83,7 @@ namespace WpfApp2
             catch (Exception ex)
             {
                 StatusText.Text = "다운로드 실패";
-                ProgressPanel.Text = $"오류: {ex.Message}";
+                FooterProgressText.Text = $"오류: {ex.Message}";
                 CloseButton.Content = "닫기";
                 CloseButton.IsEnabled = true;
                 HeaderCloseButton.IsEnabled = true;

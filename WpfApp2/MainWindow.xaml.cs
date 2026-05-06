@@ -824,27 +824,26 @@ namespace WpfApp2
         {
             if (!DatabaseService.IsConfigured)
             {
-                Dispatcher.Invoke(() => SetServerStatusUI("미설정", "#888888", "DB 연결이 설정되지 않았습니다."));
+                Dispatcher.Invoke(() => SetServerStatusUI("미설정", "#888888"));
                 return;
             }
 
-            Dispatcher.Invoke(() => SetServerStatusUI("확인중...", "#888888", null));
+            Dispatcher.Invoke(() => SetServerStatusUI("확인중...", "#888888"));
             bool ok = await DatabaseService.TestConnectionAsync(DatabaseService.ConnectionString);
             Dispatcher.Invoke(() =>
             {
                 if (ok)
-                    SetServerStatusUI("● 서버 연결됨", "#4CAF50", "DB 서버와 정상 연결되어 있습니다.");
+                    SetServerStatusUI("● 서버 연결됨", "#4CAF50");
                 else
-                    SetServerStatusUI("● 서버 오프라인", "#F44336", "DB 서버에 연결할 수 없습니다.");
+                    SetServerStatusUI("● 서버 오프라인", "#F44336");
             });
         }
 
-        private void SetServerStatusUI(string text, string colorHex, string? tooltip)
+        private void SetServerStatusUI(string text, string colorHex)
         {
             var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorHex);
             ServerStatusText.Text = text;
             ServerStatusText.Foreground = new System.Windows.Media.SolidColorBrush(color);
-            ServerStatusText.ToolTip = tooltip;
         }
 
         private void RestoreWindowPosition()
