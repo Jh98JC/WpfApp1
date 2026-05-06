@@ -204,6 +204,10 @@ namespace WpfApp2
 
             Dispatcher.Invoke(() =>
             {
+                // 스플래시 즉시 닫기 — 업데이트창만 표시
+                splashWindow?.Close();
+                splashWindow = null;
+
                 string current      = args.InstalledVersion?.ToString() ?? "알 수 없음";
                 string latest       = args.CurrentVersion  ?? "알 수 없음";
                 string changelog    = pendingChangelogUrl  ?? "";
@@ -235,14 +239,38 @@ namespace WpfApp2
 
             try
             {
+                string args = DetectSilentArgs(tempFilePath);
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tempFilePath)
                 {
-                    UseShellExecute = true
+                    UseShellExecute = true,
+                    Arguments = args
                 });
             }
             catch { }
 
             Environment.Exit(0);
+        }
+
+        private static string DetectSilentArgs(string filePath)
+        {
+            try
+            {
+                // 파일 내용에서 인스톨러 종류 감지
+                byte[] buf = new byte[65536];
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                int read = fs.Read(buf, 0, buf.Length);
+                string text = System.Text.Encoding.ASCII.GetString(buf, 0, read);
+
+                if (text.Contains("Inno Setup"))
+                    return "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART";
+
+                if (text.Contains("Nullsoft"))
+                    return "/S";
+            }
+            catch { }
+
+            // 감지 실패 시 NSIS 기본값 시도
+            return "/S";
         }
 
         private void AutoUpdater_ParseUpdateInfoEvent(ParseUpdateInfoEventArgs args)

@@ -32,8 +32,8 @@
             </Border>
 
             <StackPanel Margin="28,18,28,24">
-                <!-- 사용자명 -->
-                <TextBlock Text="사용자명" FontSize="13"
+                <!-- 아이디 -->
+                <TextBlock Text="아이디" FontSize="13"
                            Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,5"/>
                 <TextBox x:Name="UsernameBox" Height="38" FontSize="13"
                          Background="{DynamicResource ContextMenuBorderBrush}"

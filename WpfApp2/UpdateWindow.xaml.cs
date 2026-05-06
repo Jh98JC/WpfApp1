@@ -54,7 +54,7 @@ namespace WpfApp2
             CloseButton.IsEnabled = false;
             HeaderCloseButton.IsEnabled = false;
             ProgressPanel.Visibility = Visibility.Visible;
-            StatusText.Text = "다운로드 중...";
+            StatusText.Text = "업데이트 중...";
 
             _cts = new CancellationTokenSource();
             try
@@ -62,13 +62,13 @@ namespace WpfApp2
                 var progress = new Progress<int>(pct =>
                 {
                     DownloadProgressBar.Value = pct;
-                    ProgressText.Text = $"다운로드 중... {pct}%";
+                    string bar = new string('█', pct / 10) + new string('░', 10 - pct / 10);
+                    ProgressPanel.Text = $"다운로드 중... {bar} {pct}%";
                 });
 
                 string tempFile = await DownloadFileAsync(_downloadUrl, progress, _cts.Token);
 
-                ProgressText.Text = "설치를 시작합니다...";
-                StatusText.Text = "설치 중...";
+                ProgressPanel.Text = "설치 파일 실행 중... 잠시 후 앱이 종료됩니다.";
 
                 if (System.Windows.Application.Current is App app)
                     app.StartInstall(tempFile);
@@ -77,7 +77,7 @@ namespace WpfApp2
             catch (Exception ex)
             {
                 StatusText.Text = "다운로드 실패";
-                ProgressText.Text = $"오류: {ex.Message}";
+                ProgressPanel.Text = $"오류: {ex.Message}";
                 CloseButton.Content = "닫기";
                 CloseButton.IsEnabled = true;
                 HeaderCloseButton.IsEnabled = true;

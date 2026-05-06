@@ -66,6 +66,10 @@
                         <ColumnDefinition Width="80"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0">
+                        <TextBlock x:Name="LoggedInUserText"
+                                   VerticalAlignment="Center"
+                                   FontSize="11" Margin="0,0,10,0"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
                         <TextBlock x:Name="ServerStatusText"
                                    VerticalAlignment="Center"
                                    FontSize="11" Margin="0,0,10,0"

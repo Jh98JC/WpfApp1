@@ -164,23 +164,15 @@
                     </Border>
 
                     <!-- Progress Panel -->
-                    <StackPanel x:Name="ProgressPanel" 
+                    <TextBlock x:Name="ProgressPanel"
                                Visibility="Collapsed"
-                               Margin="0,15,0,0">
-                        <TextBlock x:Name="ProgressText"
-                                  Text="다운로드 중... 0%"
-                                  Foreground="#FFAAAAAA"
-                                  FontSize="12"
-                                  Margin="0,0,0,8"/>
-                        <ProgressBar x:Name="DownloadProgressBar"
-                                    Height="6"
-                                    Minimum="0"
-                                    Maximum="100"
-                                    Value="0"
-                                    Background="#FF3F3F46"
-                                    Foreground="#FF4CAF50"
-                                    BorderThickness="0"/>
-                    </StackPanel>
+                               Margin="0,15,0,0"
+                               FontSize="13"
+                               Foreground="#FF4CAF50"/>
+                    <!-- ProgressBar는 코드 호환용으로만 유지 -->
+                    <ProgressBar x:Name="DownloadProgressBar"
+                                Visibility="Collapsed"
+                                Minimum="0" Maximum="100" Value="0"/>
                 </StackPanel>
             </ScrollViewer>
 

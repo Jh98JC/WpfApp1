@@ -505,6 +505,9 @@ namespace WpfApp2
             bool isMaster = Session.IsMaster;
             personalbtn.Visibility = isMaster ? Visibility.Visible : Visibility.Collapsed;
             adminbtn.Visibility = isMaster ? Visibility.Visible : Visibility.Collapsed;
+
+            string name = !string.IsNullOrEmpty(Session.DisplayName) ? Session.DisplayName : Session.Username;
+            LoggedInUserText.Text = name;
         }
 
         private void adminbtn_Click(object sender, RoutedEventArgs e)
