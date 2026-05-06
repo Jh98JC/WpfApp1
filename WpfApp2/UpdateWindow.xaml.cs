@@ -71,10 +71,10 @@ namespace WpfApp2
 
                 DownloadProgressBar.Value = 100;
                 FooterProgressText.Text = "설치 중...";
-                await Task.Delay(300);
 
                 if (System.Windows.Application.Current is App app)
                     app.StartInstall(tempFile);
+                // ZIP의 경우 StartInstall이 바로 반환 — 창은 "설치 중..." 상태 유지하다 자동 종료
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)

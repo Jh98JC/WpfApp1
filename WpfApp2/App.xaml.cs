@@ -249,7 +249,7 @@ namespace WpfApp2
 
                 if (ext == ".zip")
                 {
-                    // ZIP: PowerShell로 압축 해제 후 앱 재시작 — 외부 업데이터 불필요
+                    // ZIP: PowerShell 먼저 실행해 초기화 시간 확보, UI는 "설치 중..." 표시 후 종료
                     string installDir = string.IsNullOrEmpty(appPath)
                         ? AppDomain.CurrentDomain.BaseDirectory
                         : Path.GetDirectoryName(appPath)!;
@@ -264,12 +264,16 @@ namespace WpfApp2
                         (string.IsNullOrEmpty(appPath) ? "" : $"Start-Process -FilePath '{ea}'\r\n") +
                         $"Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue\r\n";
                     File.WriteAllText(ps1Path, ps1);
+                    // PS를 먼저 시작해 초기화 — 이후 앱 종료 시 즉시 압축해제 진행
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
                     {
                         Arguments = $"-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File \"{ps1Path}\"",
                         UseShellExecute = false,
                         CreateNoWindow = true
                     });
+                    // UI가 "설치 중..."을 보여줄 시간을 준 뒤 종료
+                    Task.Delay(800).ContinueWith(_ => Environment.Exit(0));
+                    return; // UI 스레드 반환 — UpdateWindow가 "설치 중..." 표시 유지
                 }
                 else
                 {
