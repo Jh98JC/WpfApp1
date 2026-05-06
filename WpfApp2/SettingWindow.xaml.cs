@@ -426,19 +426,8 @@ namespace WpfApp2
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.ClickCount == 2)
-            {
-                // 더블클릭 시 최대화/복원
-                if (WindowState == WindowState.Normal)
-                    WindowState = WindowState.Maximized;
-                else
-                    WindowState = WindowState.Normal;
-            }
-            else
-            {
-                // 드래그 이동
+            if (e.ClickCount == 1)
                 DragMove();
-            }
         }
 
         private void Minimize_Click(object sender, RoutedEventArgs e)

@@ -3647,7 +3647,7 @@ ORDER BY 날짜 DESC";
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BorderBrushProperty, barBg));
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.HorizontalContentAlignmentProperty, System.Windows.HorizontalAlignment.Center));
             headerStyle.Setters.Add(new EventSetter(
-                UIElement.MouseRightButtonDownEvent,
+                UIElement.MouseRightButtonUpEvent,
                 new System.Windows.Input.MouseButtonEventHandler((s, e) =>
                 {
                     if (s is not System.Windows.Controls.Primitives.DataGridColumnHeader colHeader) return;
@@ -3697,8 +3697,14 @@ ORDER BY 날짜 DESC";
             {
                 foreach (var dgCol in grid.Columns)
                 {
-                    if (dgCol.Header is string h && dgCol.ActualWidth > 0)
-                        meta.RankListColumnWidths[h] = dgCol.ActualWidth;
+                    if (dgCol.Header is string h)
+                    {
+                        double w = dgCol.Width.UnitType == System.Windows.Controls.DataGridLengthUnitType.Pixel
+                            ? dgCol.Width.Value
+                            : dgCol.ActualWidth;
+                        if (w > 0)
+                            meta.RankListColumnWidths[h] = w;
+                    }
                 }
                 meta.RankListColumnOrder = grid.Columns
                     .OrderBy(c => c.DisplayIndex)
@@ -3745,6 +3751,7 @@ ORDER BY 날짜 DESC";
                         ? (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
                           {
                               Header = col,
+                              SortMemberPath = col,
                               Binding = new System.Windows.Data.Binding($"[{col}]") { StringFormat = "yyyy-MM-dd" },
                               Width = colWidth,
                               ElementStyle = cellElemStyle
@@ -3752,6 +3759,7 @@ ORDER BY 날짜 DESC";
                         : (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
                           {
                               Header = col,
+                              SortMemberPath = col,
                               Binding = new System.Windows.Data.Binding($"[{col}]")
                               {
                                   StringFormat = (col == "총매출액" || col == "총수량" || col == "판매수량" || col == "서비스수량") ? "N0" : null
@@ -3782,6 +3790,24 @@ ORDER BY 날짜 DESC";
                 colPanel.Children.Add(cb);
                 colHeaderCbMap[col] = cb;
             }
+
+            // 열 크기 변경 시 즉시 meta에 반영 (체크박스 토글해도 크기 유지)
+            grid.ColumnDisplayIndexChanged += (_, _) => SaveColumnWidths();
+            grid.LayoutUpdated += (_, _) =>
+            {
+                if (!gridLoaded) return;
+                foreach (var dgCol in grid.Columns)
+                {
+                    if (dgCol.Header is string h)
+                    {
+                        double w = dgCol.Width.UnitType == System.Windows.Controls.DataGridLengthUnitType.Pixel
+                            ? dgCol.Width.Value
+                            : dgCol.ActualWidth;
+                        if (w > 0)
+                            meta.RankListColumnWidths[h] = w;
+                    }
+                }
+            };
 
             // DataGrid 데이터 바인딩
             grid.ItemsSource = rows.DefaultView;
