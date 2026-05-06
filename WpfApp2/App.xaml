@@ -144,6 +144,75 @@
                 </Setter>
             </Style>
 
+            <!-- 슬림 스크롤바 스타일 (탭 캔버스용) -->
+            <Style x:Key="SlimScrollBarStyle" TargetType="{x:Type ScrollBar}">
+                <Setter Property="OverridesDefaultStyle" Value="True"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="Width" Value="5"/>
+                <Setter Property="MinWidth" Value="5"/>
+                <Setter Property="Opacity" Value="0.28"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type ScrollBar}">
+                            <Border Background="Transparent" Padding="1,2">
+                                <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                                    <Track.DecreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.LineUpCommand" Opacity="0" IsTabStop="False" Focusable="False" Height="0"/>
+                                    </Track.DecreaseRepeatButton>
+                                    <Track.IncreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.LineDownCommand" Opacity="0" IsTabStop="False" Focusable="False" Height="0"/>
+                                    </Track.IncreaseRepeatButton>
+                                    <Track.Thumb>
+                                        <Thumb Focusable="False">
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="{x:Type Thumb}">
+                                                    <Border CornerRadius="3" Background="#BBBBBB"/>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                </Track>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="Orientation" Value="Horizontal">
+                        <Setter Property="Height" Value="5"/>
+                        <Setter Property="MinHeight" Value="5"/>
+                        <Setter Property="Width" Value="Auto"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="{x:Type ScrollBar}">
+                                    <Border Background="Transparent" Padding="2,1">
+                                        <Track x:Name="PART_Track" Focusable="False">
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.LineLeftCommand" Opacity="0" IsTabStop="False" Focusable="False" Width="0"/>
+                                            </Track.DecreaseRepeatButton>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.LineRightCommand" Opacity="0" IsTabStop="False" Focusable="False" Width="0"/>
+                                            </Track.IncreaseRepeatButton>
+                                            <Track.Thumb>
+                                                <Thumb Focusable="False">
+                                                    <Thumb.Template>
+                                                        <ControlTemplate TargetType="{x:Type Thumb}">
+                                                            <Border CornerRadius="3" Background="#BBBBBB"/>
+                                                        </ControlTemplate>
+                                                    </Thumb.Template>
+                                                </Thumb>
+                                            </Track.Thumb>
+                                        </Track>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Opacity" Value="0.75"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
             <Style x:Key="TitleBarButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}" />

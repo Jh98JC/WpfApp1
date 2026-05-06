@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -9,7 +9,7 @@ using Microsoft.Web.WebView2.Wpf;
 
 namespace WpfApp2
 {
-    public partial class Window2 : System.Windows.Window
+    public partial class MobileWindow : System.Windows.Window
     {
         private const string TabDragDataFormat = "WpfApp2.TabItem";
         private System.Windows.Point? _dragStartPoint;
@@ -17,21 +17,21 @@ namespace WpfApp2
         private bool _phoneWebViewInitialized = false;
         private DockPanel? _addressBarPanel; // cached reference
 
-        public Window2()
+        public MobileWindow()
         {
             InitializeComponent();
-            this.Loaded += Window2_Loaded;
-            this.Activated += Window2_Activated;
-            this.Closed += Window2_Closed;
+            this.Loaded += MobileWindow_Loaded;
+            this.Activated += MobileWindow_Activated;
+            this.Closed += MobileWindow_Closed;
         }
 
-        private void Window2_Activated(object sender, EventArgs e)
+        private void MobileWindow_Activated(object sender, EventArgs e)
         {
-            // Window2가 활성화되면 Window3 숨기기
+            // Window2가 활성화되면 LogoWindow 숨기기
             HideWindow3();
         }
 
-        private void Window2_Closed(object? sender, EventArgs e)
+        private void MobileWindow_Closed(object? sender, EventArgs e)
         {
             // Window2가 닫히면 Window3만 표시 (MainWindow는 숨김 유지)
             ShowWindow3();
@@ -41,7 +41,7 @@ namespace WpfApp2
         {
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window3 w3 && w3.IsVisible)
+                if (win is LogoWindow w3 && w3.IsVisible)
                 {
                     w3.Hide();
                 }
@@ -64,7 +64,7 @@ namespace WpfApp2
         {
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window3 w3)
+                if (win is LogoWindow w3)
                 {
                     w3.Show();
                     w3.Topmost = true;
@@ -128,7 +128,7 @@ namespace WpfApp2
         private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => this.Close();
         // === 끝 ===
 
-        private async void Window2_Loaded(object? sender, System.Windows.RoutedEventArgs e)
+        private async void MobileWindow_Loaded(object? sender, System.Windows.RoutedEventArgs e)
         {
             // cache address panel once loaded
             _addressBarPanel = FindName("AddressBarPanel") as DockPanel;
@@ -407,3 +407,4 @@ namespace WpfApp2
         }
     }
 }
+

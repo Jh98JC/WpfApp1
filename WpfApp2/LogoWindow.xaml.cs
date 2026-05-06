@@ -12,7 +12,7 @@ using WpfMouseArgs = System.Windows.Input.MouseEventArgs;
 
 namespace WpfApp2
 {
-    public partial class Window3 : Window
+    public partial class LogoWindow : Window
     {
         private static readonly string AppDataFolder = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WpfApp2");
@@ -54,7 +54,7 @@ namespace WpfApp2
 
         // ── 생성자 / 초기화 ────────────────────────────────────────
 
-        public Window3()
+        public LogoWindow()
         {
             if (!Directory.Exists(AppDataFolder)) Directory.CreateDirectory(AppDataFolder);
             InitializeComponent();
@@ -120,8 +120,8 @@ namespace WpfApp2
 
         private void SavePosition()
         {
-            try { File.WriteAllText(PositionFile, JsonSerializer.Serialize(new Window3Position { Left = Left, Top = Top })); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Window3 save: " + ex); }
+            try { File.WriteAllText(PositionFile, JsonSerializer.Serialize(new LogoWindowPosition { Left = Left, Top = Top })); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("LogoWindow save: " + ex); }
         }
 
         private void RestorePosition()
@@ -129,12 +129,13 @@ namespace WpfApp2
             try
             {
                 if (!File.Exists(PositionFile)) return;
-                var p = JsonSerializer.Deserialize<Window3Position>(File.ReadAllText(PositionFile));
+                var p = JsonSerializer.Deserialize<LogoWindowPosition>(File.ReadAllText(PositionFile));
                 if (p != null) { Left = p.Left; Top = p.Top; }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Window3 restore: " + ex); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("LogoWindow restore: " + ex); }
         }
     }
 
-    public class Window3Position { public double Left { get; set; } public double Top { get; set; } }
+    public class LogoWindowPosition { public double Left { get; set; } public double Top { get; set; } }
 }
+

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -23,6 +23,7 @@ using LiveChartsCore.SkiaSharpView.Painting;
 using SkiaSharp;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 using Microsoft.Data.SqlClient;
+using System.Data;
 
 
 namespace WpfApp2
@@ -40,18 +41,93 @@ namespace WpfApp2
         private static readonly string ChartStateFile = System.IO.Path.Combine(AppDataFolder, "chart_states.json");
 
         private DispatcherTimer leaveTimer;
+        private DispatcherTimer _serverCheckTimer;
 
         private readonly Random _rand = new Random(); // Random 인스턴스는 readonly로 선언
 
         // 1, 2번 오류: 명확한 네임스페이스 지정
         private System.Windows.Point? _lastBorderRightClickPoint = null;
 
-        // 단축키로 열었는지 추적하는 플래그 (마우스가 한 번 들어올 때까지 Window3 전환 방지)
+        // 단축키로 열었는지 추적하는 플래그 (마우스가 한 번 들어올 때까지 LogoWindow 전환 방지)
         private bool _openedByHotkey = false;
 
-        private const int HOTKEY_ID_ALT_F1 = 0xA701; // 임의 ID
-        private const uint MOD_ALT = 0x0001;
-        private const uint VK_F1 = 0x70;
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int VK_MENU = 0x12;
+        private const int VK_SHIFT = 0x10;
+        private const int VK_CONTROL = 0x11;
+
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private LowLevelKeyboardProc _keyboardProc;
+        private IntPtr _hookHandle = IntPtr.Zero;
+
+        private Forms.NotifyIcon? _notifyIcon;
+        private bool _showTaskbarIcon = true;
+        private bool _showTrayIcon = true;
+
+        internal bool TaskbarIconVisible => _showTaskbarIcon;
+        internal bool TrayIconVisible => _showTrayIcon;
+        internal void SetTaskbarIconVisible(bool visible)
+        {
+            _showTaskbarIcon = visible;
+            ApplyTaskbarVisibility(this, visible);
+            foreach (Window w in System.Windows.Application.Current.Windows)
+            {
+                if (w is LogoWindow w3v) ApplyTaskbarVisibility(w3v, visible);
+            }
+            SaveWindowPosition();
+        }
+
+        private static void ApplyTaskbarVisibility(Window win, bool visible)
+        {
+            const int GWL_EXSTYLE      = -20;
+            const int WS_EX_APPWINDOW  = 0x00040000;
+            const int WS_EX_TOOLWINDOW = 0x00000080;
+            const uint SWP_NOMOVE       = 0x0002;
+            const uint SWP_NOSIZE       = 0x0001;
+            const uint SWP_NOZORDER     = 0x0004;
+            const uint SWP_FRAMECHANGED = 0x0020;
+
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            int style = GetWindowLong(hwnd, GWL_EXSTYLE);
+            if (visible)
+                style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW;
+            else
+                style = (style & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW;
+            SetWindowLong(hwnd, GWL_EXSTYLE, style);
+            // SWP_FRAMECHANGED: SetWindowLong 후 스타일 변경을 작업표시줄에 즉시 반영
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+
+        internal void SetTrayIconVisible(bool visible)
+        {
+            _showTrayIcon = visible;
+            if (_notifyIcon != null) _notifyIcon.Visible = visible;
+            SaveWindowPosition();
+        }
+
+        // 핫키 설정 (기본값: Alt+`)
+        private int _hotkeyVk = 0xC0;
+        private bool _hotkeyAlt = true;
+        private bool _hotkeyCtrl = false;
+        private bool _hotkeyShift = false;
+
+        internal int HotkeyVk => _hotkeyVk;
+        internal bool HotkeyAlt => _hotkeyAlt;
+        internal bool HotkeyCtrl => _hotkeyCtrl;
+        internal bool HotkeyShift => _hotkeyShift;
+
+        internal void ApplyHotkeySettings(int vk, bool alt, bool ctrl, bool shift)
+        {
+            _hotkeyVk = vk;
+            _hotkeyAlt = alt;
+            _hotkeyCtrl = ctrl;
+            _hotkeyShift = shift;
+            SaveWindowPosition();
+        }
 
         // 이미지 좌우 가장자리 및 내부 라벨 간격 상수 추가
         private const double HorizontalImageEdgePadding = 15.0; // 좌우 가장자리 여백 (기존 6 -> 15)
@@ -66,18 +142,43 @@ namespace WpfApp2
         private DispatcherTimer _gridCheckTimer;
 
         [DllImport("user32.dll")]
-        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
         [DllImport("user32.dll")]
-        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern short GetKeyState(int nVirtKey);
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")]
+        private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         private const int SW_SHOWNORMAL = 1;
+        private const int SW_SHOWNOACTIVATE = 4;
 
         // 추가: 정확한 스크린 좌표 판정을 위한 Win32 RECT & GetWindowRect
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll")]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
@@ -140,36 +241,48 @@ namespace WpfApp2
 
             var source = (HwndSource)PresentationSource.FromVisual(this)!;
             source.AddHook(WndProc);
-            RegisterHotKey(source.Handle, HOTKEY_ID_ALT_F1, MOD_ALT, VK_F1); // Alt+F1 등록
+
+            _keyboardProc = KeyboardHookCallback;
+            using var curProcess = System.Diagnostics.Process.GetCurrentProcess();
+            using var curModule = curProcess.MainModule!;
+            _hookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, GetModuleHandle(curModule.ModuleName), 0);
+
+            InitNotifyIcon();
         }
 
         protected override void OnClosed(EventArgs e)
         {
             // 핫키 해제
-            var source = (HwndSource)PresentationSource.FromVisual(this);
-            if (source != null)
-            {
-                UnregisterHotKey(source.Handle, HOTKEY_ID_ALT_F1);
-            }
+            if (_hookHandle != IntPtr.Zero)
+                UnhookWindowsHookEx(_hookHandle);
+            _notifyIcon?.Dispose();
+            _notifyHostForm?.Dispose();
             base.OnClosed(e);
             SaveWindowPosition();
             SaveAllTabs(); // 탭 정보 저장
             SaveAllButtonStates(); // 버튼 정보 저장
         }
 
-        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            // WM_HOTKEY =0x0312
-            if (msg == 0x0312)
+            if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
             {
-                int id = wParam.ToInt32();
-                if (id == HOTKEY_ID_ALT_F1)
+                int vkCode = Marshal.ReadInt32(lParam);
+                if (vkCode == _hotkeyVk)
                 {
-                    ShowAndActivateMain();
-                    handled = true;
+                    bool altOk  = !_hotkeyAlt  || (GetKeyState(VK_MENU)    & 0x8000) != 0;
+                    bool ctrlOk = !_hotkeyCtrl || (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    bool shiftOk= !_hotkeyShift|| (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+                    if (altOk && ctrlOk && shiftOk)
+                        Dispatcher.Invoke(() => ShowAndActivateMain());
                 }
             }
-            else if (msg == WM_GETMINMAXINFO)
+            return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_GETMINMAXINFO)
             {
                 var mmi = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO))!;
                 var screen = Forms.Screen.FromHandle(hwnd);
@@ -187,31 +300,30 @@ namespace WpfApp2
             // 단축키로 열었다는 플래그 설정
             _openedByHotkey = true;
 
-            // Window2, Window3 숨기기
+            // MobileWindow, LogoWindow 숨기기
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window2 w2 && w2.IsVisible) w2.Hide();
-                else if (win is Window3 w3 && w3.IsVisible) w3.Hide();
+                if (win is MobileWindow w2 && w2.IsVisible) w2.Hide();
+                else if (win is LogoWindow w3 && w3.IsVisible) w3.Hide();
             }
-            // 메인윈도우 표시/활성화
+            // 메인윈도우 표시/활성화 (맨 앞으로)
             if (Visibility != Visibility.Visible) Visibility = Visibility.Visible;
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             var hwnd = new WindowInteropHelper(this).Handle;
             ShowWindow(hwnd, SW_SHOWNORMAL);
-            SetForegroundWindow(hwnd);
+            ForceToForeground(hwnd);
             Activate();
             Focus();
             Keyboard.Focus(this);
 
-            // Alt키 해제 직후 포커스 보강
             Dispatcher.InvokeAsync(() =>
             {
-                if (!IsActive) Activate();
+                if (!IsActive) { ForceToForeground(hwnd); Activate(); }
                 Focus();
                 Keyboard.Focus(this);
             }, DispatcherPriority.ApplicationIdle);
 
-            // 단축키로 열었을 때는 마우스가 밖에 있어도 Window3 전환하지 않음
+            // 단축키로 열었을 때는 마우스가 밖에 있어도 LogoWindow 전환하지 않음
             // 마우스가 메인윈도우 안에 들어왔다가 나갈 때만 전환되도록 함
             if (!_openedByHotkey && IsMouseOutsideMainOrWindow1())
             {
@@ -230,9 +342,10 @@ namespace WpfApp2
             if (!mainRect.IsEmpty && mainRect.Contains(mousePos)) return false;
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window1 w1 && w1.IsVisible)
+                if (win == this || win is LogoWindow) continue;
+                if (win.IsVisible)
                 {
-                    var r = GetWindowScreenRect(w1);
+                    var r = GetWindowScreenRect(win);
                     if (!r.IsEmpty && r.Contains(mousePos)) return false;
                 }
             }
@@ -245,15 +358,17 @@ namespace WpfApp2
             if (_openedByHotkey)
                 return;
 
-            // 마우스가 Window1 위에 있으면 무시 (스크린 좌표로 검증)
-            foreach (Window win in System.Windows.Application.Current.Windows)
+            // 마우스가 소유 자식 창 위에 있으면 무시 (스크린 좌표로 검증)
             {
-                if (win is Window1 w1 && w1.IsVisible)
+                var mousePos = System.Windows.Forms.Control.MousePosition;
+                foreach (Window win in System.Windows.Application.Current.Windows)
                 {
-                    var mousePos = System.Windows.Forms.Control.MousePosition;
-                    var r = GetWindowScreenRect(w1);
-                    if (!r.IsEmpty && r.Contains(mousePos))
-                        return;
+                    if (win == this || win is LogoWindow) continue;
+                    if (win.IsVisible)
+                    {
+                        var r = GetWindowScreenRect(win);
+                        if (!r.IsEmpty && r.Contains(mousePos)) return;
+                    }
                 }
             }
 
@@ -277,31 +392,28 @@ namespace WpfApp2
             if (_openedByHotkey)
                 return;
 
-            // 마우스가 여전히 MainWindow, Window1 위에 있으면 아무것도 하지 않음 (스크린 좌표 판정)
+            // 마우스가 여전히 MainWindow 또는 소유 자식창 위에 있으면 아무것도 하지 않음
             var mousePos = System.Windows.Forms.Control.MousePosition;
             var mainRect = GetWindowScreenRect(this);
             if (!mainRect.IsEmpty && mainRect.Contains(mousePos)) return;
 
-            // 열려있는 모든 자식 Window와 컨텍스트 메뉴를 닫기
             foreach (Window win in System.Windows.Application.Current.Windows.Cast<Window>().ToList())
             {
-                if (win == this) continue; // MainWindow 자체는 제외
-                if (win is Window3) continue; // Window3는 제외 (런처 아이콘)
-
-                if (win is Window1 w1 && w1.IsVisible)
+                if (win == this || win is LogoWindow) continue;
+                if (win.IsVisible)
                 {
-                    var r = GetWindowScreenRect(w1);
-                    if (!r.IsEmpty && r.Contains(mousePos)) return;
+                    var r = GetWindowScreenRect(win);
+                    if (!r.IsEmpty && r.Contains(mousePos)) return; // 마우스가 자식창 위 → 아무것도 하지 않음
                 }
+            }
 
-                // 버튼 설정 다이얼로그나 기타 자식 창 닫기
-                if (win.Owner == this && win.IsVisible)
+            // 마우스가 어떤 자식창 위에도 없을 때만 닫고 LogoWindow로 전환
+            foreach (Window win in System.Windows.Application.Current.Windows.Cast<Window>().ToList())
+            {
+                if (win == this || win is LogoWindow) continue;
+                if (win.Owner == this && win.IsVisible && !(win is MobileWindow))
                 {
-                    try
-                    {
-                        win.Close();
-                    }
-                    catch { }
+                    try { win.Close(); } catch { }
                 }
             }
 
@@ -392,23 +504,28 @@ namespace WpfApp2
         }
 
         // setbtn_Click 이벤트 핸들러에서 Window1을 올바르게 생성하고 표시
-        // ── Window3 ↔ MainWindow 전환 애니메이션 ─────────────────────────────
+        // ── LogoWindow ↔ MainWindow 전환 애니메이션 ─────────────────────────────
         private static readonly Duration _w3TransDuration = new Duration(TimeSpan.FromMilliseconds(260));
 
-        private void ShowMainWindowAnimated(Window3 w3)
+        private static System.Windows.Point CalcOriginToward(double mainLeft, double mainTop, double mainW, double mainH, LogoWindow w3)
+        {
+            double relX = (w3.Left + w3.Width  / 2.0 - mainLeft) / mainW;
+            double relY = (w3.Top  + w3.Height / 2.0 - mainTop)  / mainH;
+            return new System.Windows.Point(
+                Math.Max(0, Math.Min(1, relX)),
+                Math.Max(0, Math.Min(1, relY)));
+        }
+
+        private void ShowMainWindowAnimated(LogoWindow w3)
         {
             double mainLeft = Left, mainTop = Top;
             double sx = w3.Width / ActualWidth, sy = w3.Height / ActualHeight;
+            var origin = CalcOriginToward(mainLeft, mainTop, ActualWidth, ActualHeight, w3);
 
-            // 위치만 w3으로 이동 (Width/Height는 변경 없음 → Win32 리사이즈 없음)
-            BeginAnimation(LeftProperty, null); BeginAnimation(TopProperty, null);
-            Left = w3.Left; Top = w3.Top;
-
-            // 콘텐츠를 w3 크기로 스케일 (GPU 렌더링 — Win32 호출 없음)
             var scale = new ScaleTransform(sx, sy);
             if (Content is FrameworkElement root)
             {
-                root.RenderTransformOrigin = new System.Windows.Point(0, 0);
+                root.RenderTransformOrigin = origin;
                 root.RenderTransform = scale;
             }
 
@@ -419,15 +536,6 @@ namespace WpfApp2
             DoubleAnimation Anim(double from, double to) =>
                 new DoubleAnimation(from, to, _w3TransDuration) { EasingFunction = ease };
 
-            // 위치 애니메이션 (이동만, 리사이즈 없음)
-            var leftAnim = Anim(w3.Left, mainLeft);
-            leftAnim.Completed += (_, __) => { Left = mainLeft; BeginAnimation(LeftProperty, null); };
-            var topAnim  = Anim(w3.Top,  mainTop);
-            topAnim.Completed  += (_, __) => { Top  = mainTop;  BeginAnimation(TopProperty,  null); };
-            BeginAnimation(LeftProperty, leftAnim);
-            BeginAnimation(TopProperty,  topAnim);
-
-            // 스케일 애니메이션
             var syAnim = Anim(sy, 1.0);
             syAnim.Completed += (_, __) =>
             {
@@ -437,15 +545,16 @@ namespace WpfApp2
             scale.BeginAnimation(ScaleTransform.ScaleYProperty, syAnim);
         }
 
-        private void HideMainWindowAnimated(Window3 w3, Action onComplete)
+        private void HideMainWindowAnimated(LogoWindow w3, Action onComplete)
         {
             double mainLeft = Left, mainTop = Top;
             double sx = w3.Width / ActualWidth, sy = w3.Height / ActualHeight;
+            var origin = CalcOriginToward(mainLeft, mainTop, ActualWidth, ActualHeight, w3);
 
             var scale = new ScaleTransform(1.0, 1.0);
             if (Content is FrameworkElement root)
             {
-                root.RenderTransformOrigin = new System.Windows.Point(0, 0);
+                root.RenderTransformOrigin = origin;
                 root.RenderTransform = scale;
             }
 
@@ -453,16 +562,11 @@ namespace WpfApp2
             DoubleAnimation Anim(double from, double to) =>
                 new DoubleAnimation(from, to, _w3TransDuration) { EasingFunction = ease };
 
-            BeginAnimation(LeftProperty, Anim(mainLeft, w3.Left));
-            BeginAnimation(TopProperty,  Anim(mainTop,  w3.Top));
-
             var syAnim = Anim(1.0, sy);
             syAnim.Completed += (_, __) =>
             {
-                BeginAnimation(LeftProperty, null); BeginAnimation(TopProperty, null);
-                Left = mainLeft; Top = mainTop;
-                if (Content is FrameworkElement r) r.RenderTransform = null;
                 Visibility = Visibility.Hidden;
+                if (Content is FrameworkElement r) r.RenderTransform = null;
                 onComplete();
             };
             scale.BeginAnimation(ScaleTransform.ScaleXProperty, Anim(1.0, sx));
@@ -476,20 +580,21 @@ namespace WpfApp2
             if (this.Visibility != Visibility.Visible)
                 return;
 
-            System.Diagnostics.Debug.WriteLine($"[MainWindow] WindowState={WindowState}, Before creating Window1: Left={Left}, Top={Top}, Width={ActualWidth}, Height={ActualHeight}");
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] WindowState={WindowState}, Before creating SettingWindow: Left={Left}, Top={Top}, Width={ActualWidth}, Height={ActualHeight}");
 
             // 이미 열려있는 Window1이 있으면 닫고 새로 생성
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window1 w1 && w1.IsVisible)
+                if (win is SettingWindow w1 && w1.IsVisible)
                 {
                     w1.Close();
                     break;
                 }
             }
 
-            var win1 = new Window1();
+            var win1 = new SettingWindow();
             win1.Owner = this;
+            win1.ShowInTaskbar = false;
             win1.Show();
         }
 
@@ -498,15 +603,15 @@ namespace WpfApp2
             // Window1이 열려있으면 닫기
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window1 w1 && w1.IsVisible)
+                if (win is SettingWindow w1 && w1.IsVisible)
                     w1.Close();
             }
 
-            // Window2 재사용 (숨겨져 있어도 탭 유지 후 다시 표시)
-            Window2? existingW2 = null;
+            // MobileWindow 재사용 (숨겨져 있어도 탭 유지 후 다시 표시)
+            MobileWindow? existingW2 = null;
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window2 w2)
+                if (win is MobileWindow w2)
                 {
                     existingW2 = w2;
                     break;
@@ -516,7 +621,7 @@ namespace WpfApp2
             if (existingW2 == null)
             {
                 // 새로 생성
-                existingW2 = new Window2();
+                existingW2 = new MobileWindow();
                 existingW2.Owner = this;
                 existingW2.WindowStartupLocation = WindowStartupLocation.Manual;
                 existingW2.Loaded += (s, e2) => PositionWindow2(existingW2);
@@ -539,13 +644,13 @@ namespace WpfApp2
             this.Hide();
         }
 
-        private void PositionWindow2(Window2 w2)
+        private void PositionWindow2(MobileWindow w2)
         {
             double offset = 25; // 추가 여유
             double win3Height = 0;
             foreach (Window w in System.Windows.Application.Current.Windows)
             {
-                if (w is Window3 w3 && w3.IsVisible)
+                if (w is LogoWindow w3 && w3.IsVisible)
                 {
                     win3Height = w3.Height;
                     break;
@@ -559,10 +664,10 @@ namespace WpfApp2
         private void ShowWindow3AtLeftBottom()
         {
             string window3PositionFile = System.IO.Path.Combine(AppDataFolder, "window3_position.json");
-            Window3? existing = null;
+            LogoWindow? existing = null;
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window3 w3)
+                if (win is LogoWindow w3)
                 {
                     existing = w3;
                     if (w3.IsVisible)
@@ -571,16 +676,16 @@ namespace WpfApp2
                 }
             }
 
-            // Window1 닫기 (Window2는 닫거나 숨기지 않음)
+            // SettingWindow 닫기 (Window2는 닫거나 숨기지 않음)
             foreach (Window w1 in System.Windows.Application.Current.Windows)
             {
-                if (w1 is Window1 window1 && window1.IsVisible)
-                    window1.Close();
+                if (w1 is SettingWindow SettingWindow && SettingWindow.IsVisible)
+                    SettingWindow.Close();
             }
 
             if (existing != null && !existing.IsVisible)
             {
-                // 숨겨진 Window3 재사용
+                // 숨겨진 LogoWindow 재사용
                 existing.Owner = this;
                 existing.WindowStartupLocation = WindowStartupLocation.Manual;
                 if (!File.Exists(window3PositionFile))
@@ -588,7 +693,7 @@ namespace WpfApp2
                     existing.Left = this.Left;
                     existing.Top = this.Top + this.Height - existing.Height;
                 }
-                existing.ShowInTaskbar = false;
+                existing.ShowInTaskbar = _showTaskbarIcon;
                 existing.Topmost = true;
                 HideMainWindowAnimated(existing, () =>
                 {
@@ -599,7 +704,7 @@ namespace WpfApp2
             }
 
             // 새로 생성
-            var win3 = new Window3();
+            var win3 = new LogoWindow();
             win3.Owner = this;
             win3.WindowStartupLocation = WindowStartupLocation.Manual;
             win3.Topmost = true;
@@ -647,7 +752,7 @@ namespace WpfApp2
                 {
                     foreach (Window win in System.Windows.Application.Current.Windows)
                     {
-                        if (win is Window2 w2 && w2.IsVisible)
+                        if (win is MobileWindow w2 && w2.IsVisible)
                             w2.Hide();
                     }
                     ShowMainWindowAnimated(win3);
@@ -656,7 +761,7 @@ namespace WpfApp2
                 isDragging = false;
             };
 
-            win3.ShowInTaskbar = false;
+            win3.ShowInTaskbar = _showTaskbarIcon;
             win3.Closed += (s, e) =>
             {
                 if (this.Visibility != Visibility.Visible)
@@ -673,6 +778,11 @@ namespace WpfApp2
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            _ = CheckServerStatusAsync();
+            _serverCheckTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _serverCheckTimer.Tick += async (_, _) => await CheckServerStatusAsync();
+            _serverCheckTimer.Start();
+
             double targetLeft = Left;
             double targetTop = Top;
 
@@ -689,6 +799,33 @@ namespace WpfApp2
             Top = targetTop;
         }
 
+        private async Task CheckServerStatusAsync()
+        {
+            if (!DatabaseService.IsConfigured)
+            {
+                Dispatcher.Invoke(() => SetServerStatusUI("미설정", "#888888", "DB 연결이 설정되지 않았습니다."));
+                return;
+            }
+
+            Dispatcher.Invoke(() => SetServerStatusUI("확인중...", "#888888", null));
+            bool ok = await DatabaseService.TestConnectionAsync(DatabaseService.ConnectionString);
+            Dispatcher.Invoke(() =>
+            {
+                if (ok)
+                    SetServerStatusUI("● 서버 연결됨", "#4CAF50", "DB 서버와 정상 연결되어 있습니다.");
+                else
+                    SetServerStatusUI("● 서버 오프라인", "#F44336", "DB 서버에 연결할 수 없습니다.");
+            });
+        }
+
+        private void SetServerStatusUI(string text, string colorHex, string? tooltip)
+        {
+            var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorHex);
+            ServerStatusText.Text = text;
+            ServerStatusText.Foreground = new System.Windows.Media.SolidColorBrush(color);
+            ServerStatusText.ToolTip = tooltip;
+        }
+
         private void RestoreWindowPosition()
         {
             try
@@ -696,12 +833,18 @@ namespace WpfApp2
                 if (File.Exists(SettingsFile))
                 {
                     var json = File.ReadAllText(SettingsFile);
-                    var pos = JsonSerializer.Deserialize<WindowPosition>(json);
-
-                    if (pos != null)
+                    var s = JsonSerializer.Deserialize<AppSettings>(json);
+                    if (s != null)
                     {
-                        Left = pos.Left;
-                        Top = pos.Top;
+                        Left = s.Left;
+                        Top = s.Top;
+                        if (s.HotkeyVirtualKey != 0) _hotkeyVk = s.HotkeyVirtualKey;
+                        _hotkeyAlt       = s.HotkeyAlt;
+                        _hotkeyCtrl      = s.HotkeyCtrl;
+                        _hotkeyShift     = s.HotkeyShift;
+                        _showTaskbarIcon = s.ShowTaskbarIcon;
+                        ShowInTaskbar    = _showTaskbarIcon;
+                        _showTrayIcon    = s.ShowTrayIcon;
                         return;
                     }
                 }
@@ -724,15 +867,79 @@ namespace WpfApp2
 
         private void SaveWindowPosition()
         {
-            var pos = new WindowPosition { Left = Left, Top = Top };
-            var json = JsonSerializer.Serialize(pos);
-            File.WriteAllText(SettingsFile, json);
+            var s = new AppSettings
+            {
+                Left = Left, Top = Top,
+                HotkeyVirtualKey = _hotkeyVk,
+                HotkeyAlt        = _hotkeyAlt,
+                HotkeyCtrl       = _hotkeyCtrl,
+                HotkeyShift      = _hotkeyShift,
+                ShowTaskbarIcon  = _showTaskbarIcon,
+                ShowTrayIcon     = _showTrayIcon,
+            };
+            File.WriteAllText(SettingsFile, JsonSerializer.Serialize(s));
         }
 
-        private class WindowPosition
+        private class AppSettings
         {
             public double Left { get; set; }
             public double Top { get; set; }
+            public int  HotkeyVirtualKey { get; set; } = 0xC0;
+            public bool HotkeyAlt        { get; set; } = true;
+            public bool HotkeyCtrl       { get; set; } = false;
+            public bool HotkeyShift      { get; set; } = false;
+            public bool ShowTaskbarIcon  { get; set; } = true;
+            public bool ShowTrayIcon     { get; set; } = true;
+        }
+
+        private void ForceToForeground(IntPtr hwnd)
+        {
+            var fg = GetForegroundWindow();
+            var fgThread = GetWindowThreadProcessId(fg, out _);
+            var myThread = GetCurrentThreadId();
+            bool attached = fgThread != myThread && AttachThreadInput(fgThread, myThread, true);
+            try
+            {
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+                SwitchToThisWindow(hwnd, true);
+            }
+            finally
+            {
+                if (attached) AttachThreadInput(fgThread, myThread, false);
+            }
+        }
+
+        private Forms.Form? _notifyHostForm;
+
+        private void InitNotifyIcon()
+        {
+            // 숨김 Form을 호스트로 사용 → LogoWindow 전환 시에도 NotifyIcon 유지
+            _notifyHostForm = new Forms.Form
+            {
+                ShowInTaskbar = false,
+                WindowState = Forms.FormWindowState.Minimized,
+                FormBorderStyle = Forms.FormBorderStyle.None,
+                Opacity = 0,
+            };
+
+            System.Drawing.Icon? appIcon = null;
+            try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Process.GetCurrentProcess().MainModule!.FileName); }
+            catch { appIcon = System.Drawing.SystemIcons.Application; }
+
+            var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add("열기", null, (_, _) => Dispatcher.Invoke(ShowAndActivateMain));
+            menu.Items.Add(new Forms.ToolStripSeparator());
+            menu.Items.Add("종료", null, (_, _) => Dispatcher.Invoke(() => System.Windows.Application.Current.Shutdown()));
+
+            _notifyIcon = new Forms.NotifyIcon
+            {
+                Icon = appIcon,
+                Text = "WpfApp2",
+                Visible = _showTrayIcon,
+                ContextMenuStrip = menu,
+            };
+            _notifyIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ShowAndActivateMain);
         }
 
         // TitleBar_MouseLeftButtonDown 이벤트 핸들러 추가
@@ -1412,12 +1619,12 @@ namespace WpfApp2
             // Window2가 열려 있으면 미리 숨기고 Window3을 띄움
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window2 w2 && w2.IsVisible)
+                if (win is MobileWindow w2 && w2.IsVisible)
                 {
                     w2.Hide();
                 }
             }
-            var win3 = new Window3();
+            var win3 = new LogoWindow();
             win3.Owner = this; // 필요시 부모 지정
             win3.Show();
         }
@@ -2091,8 +2298,17 @@ namespace WpfApp2
             public string? DbMenuNameFilter { get; set; }           // 메뉴명 필터
             public double InnerHeight { get; set; } = 0;            // 내부 CartesianChart 높이 (0=기본값)
             public string ChartFont { get; set; } = "Malgun Gothic"; // 차트 전체 글꼴
-            public string? ChartLabelColor { get; set; }             // null=테마 기본, "#RRGGBB"=사용자 지정
-            public double ChartLabelSize { get; set; } = 0;          // 0=기본, >0=사용자 지정 크기
+            public string? ChartLabelColor { get; set; }
+            public double ChartLabelSize { get; set; } = 0;
+            public bool ShowBars { get; set; } = true;
+            public List<string> RankListVisibleColumns { get; set; } = new List<string> { "날짜", "매장명", "중분류", "메뉴명", "총매출액" };
+            public string RankListLabelFont { get; set; } = "Malgun Gothic";
+            public double RankListLabelSize { get; set; } = 13;
+            public string? RankListLabelColor { get; set; } = null;
+            public string RankListValueFont { get; set; } = "Malgun Gothic";
+            public double RankListValueSize { get; set; } = 13;
+            public string? RankListValueColor { get; set; } = null;
+            public Dictionary<string, double> RankListColumnWidths { get; set; } = new Dictionary<string, double>();
         }
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
@@ -2324,11 +2540,12 @@ namespace WpfApp2
 
             (string type, string label, string subLabel, UIElement icon)[] charts =
             {
-                ("Line",  "선 그래프",    "Line Chart",    MakeLineIcon()),
-                ("Bar",   "세로 막대",    "Column Chart",  MakeBarIcon()),
-                ("HBar",  "가로 막대",    "Bar Chart",     MakeHBarIcon()),
-                ("Pie",   "원형 차트",    "Pie Chart",     MakePieIcon()),
-                ("Gauge", "게이지",       "Gauge",         MakeGaugeIcon()),
+                ("Line",     "선 그래프",  "Line Chart",   MakeLineIcon()),
+                ("Bar",      "세로 막대",  "Column Chart", MakeBarIcon()),
+                ("HBar",     "가로 막대",  "Bar Chart",    MakeHBarIcon()),
+                ("Pie",      "원형 차트",  "Pie Chart",    MakePieIcon()),
+                ("Gauge",    "게이지",     "Gauge",        MakeGaugeIcon()),
+                ("RankList", "순위표",     "Rank List",    MakeRankListIcon()),
             };
 
             string? selectedChartType = null;
@@ -2445,6 +2662,25 @@ namespace WpfApp2
             return c;
         }
 
+        private static UIElement MakeRankListIcon()
+        {
+            var c = new System.Windows.Controls.Canvas { Width = 56, Height = 36 };
+            var widths = new[] { 46.0, 36.0, 28.0, 20.0, 14.0 };
+            for (int i = 0; i < widths.Length; i++)
+            {
+                var rect = new System.Windows.Shapes.Rectangle
+                {
+                    Width = widths[i], Height = 4,
+                    Fill = IconStroke, RadiusX = 2, RadiusY = 2,
+                    Opacity = 1.0 - i * 0.15
+                };
+                System.Windows.Controls.Canvas.SetLeft(rect, 0);
+                System.Windows.Controls.Canvas.SetTop(rect, 2 + i * 7);
+                c.Children.Add(rect);
+            }
+            return c;
+        }
+
         private static UIElement MakePieIcon()
         {
             var c = new System.Windows.Controls.Canvas { Width = 40, Height = 40 };
@@ -2547,7 +2783,7 @@ namespace WpfApp2
             sourceCombo.Items.Add("CSV 파일");
             sourceCombo.Items.Add("API (실시간)");
             sourceCombo.Items.Add("DB (대진포스DB)");
-            sourceCombo.SelectedIndex = 0;
+            sourceCombo.SelectedIndex = chartType == "RankList" ? 4 : 0;
             stack.Children.Add(sourceCombo);
 
             // 데이터 입력 영역 (동적으로 변경됨)
@@ -2779,6 +3015,9 @@ namespace WpfApp2
                 case "Gauge":
                     chartControl = CreateGaugeChart(meta);
                     break;
+                case "RankList":
+                    chartControl = CreateRankList(meta);
+                    break;
             }
 
             if (chartControl != null)
@@ -2847,15 +3086,15 @@ namespace WpfApp2
             {
                 ThemeManager.Theme.White => (
                     new SKColor(228, 228, 240),
-                    new SKColor(80,  80,  112),
+                    new SKColor(50,  50,  80),
                     new SKColor(196, 196, 212)),
                 ThemeManager.Theme.Black => (
                     new SKColor(7,   7,   7),
-                    new SKColor(144, 144, 144),
+                    new SKColor(210, 210, 210),
                     new SKColor(37,  37,  37)),
                 _ => (
                     new SKColor(19, 19, 27),
-                    new SKColor(160, 160, 170),
+                    new SKColor(220, 220, 230),
                     new SKColor(55,  55,  65))
             };
 
@@ -3061,13 +3300,16 @@ namespace WpfApp2
             var displayLabels = meta.Labels.AsEnumerable().Reverse().ToList();
 
             var tf = SKTypeface.FromFamilyName(meta.ChartFont);
-            var (_, axisLabelHBar, gridLineHBar) = GetChartColors();
+            var (_, axisLabelHBar, _) = GetChartColors();
             var labelColorHBar = ParseChartColor(meta.ChartLabelColor, new SKColor(240, 240, 240));
             var axisColorHBar = ParseChartColor(meta.ChartLabelColor, axisLabelHBar);
             float yHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 18f;
             float xHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 20f;
             float dlHSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
             var labelPaint = new SolidColorPaint(labelColorHBar) { SKTypeface = tf };
+            LiveChartsCore.Drawing.IPaint<LiveChartsCore.SkiaSharpView.Drawing.SkiaSharpDrawingContext>? barFill = meta.ShowBars
+                ? new LinearGradientPaint(new[] { P_Teal.WithAlpha(220), P_Blue.WithAlpha(200) }, new SKPoint(0, 0), new SKPoint(1, 0))
+                : null;
             double naturalH = Math.Max(200, displayValues.Count * 38 + 60);
 
             var chart = new CartesianChart
@@ -3084,9 +3326,7 @@ namespace WpfApp2
                     new RowSeries<double>
                     {
                         Values = displayValues,
-                        Fill = new LinearGradientPaint(
-                            new[] { P_Teal.WithAlpha(220), P_Blue.WithAlpha(200) },
-                            new SKPoint(0, 0), new SKPoint(1, 0)),
+                        Fill = barFill,
                         Stroke = null,
                         Rx = 3,
                         Ry = 3,
@@ -3095,7 +3335,7 @@ namespace WpfApp2
                         DataLabelsSize = dlHSize,
                         DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Start,
                         DataLabelsTranslate = new LiveChartsCore.Drawing.LvcPoint(1.0, 0),
-                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
+                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0") + "원"
                     }
                 },
                 YAxes = new[]
@@ -3117,13 +3357,343 @@ namespace WpfApp2
                     {
                         TextSize = xHSize,
                         LabelsPaint = new SolidColorPaint(axisColorHBar) { SKTypeface = tf },
-                        SeparatorsPaint = new SolidColorPaint(gridLineHBar.WithAlpha(80)) { StrokeThickness = 1 },
-                        TicksPaint = null
+                        SeparatorsPaint = null,
+                        TicksPaint = null,
+                        Labeler = v => v.ToString("N0") + "원"
                     }
                 }
             };
             AttachChartClickDetails(chart, meta);
             return WrapInScrollViewer(chart);
+        }
+
+        private static readonly string[] AllRawColumns = { "날짜", "매장명", "중분류", "메뉴명", "총매출액", "총수량", "판매수량", "서비스수량" };
+
+        private FrameworkElement CreateRankList(ChartMeta meta)
+        {
+            float labelSize = meta.RankListLabelSize > 0 ? (float)meta.RankListLabelSize : 13f;
+            float valueSize = meta.RankListValueSize > 0 ? (float)meta.RankListValueSize : 13f;
+
+            var outer = new System.Windows.Controls.StackPanel();
+            outer.SetResourceReference(System.Windows.Controls.Panel.BackgroundProperty, "WindowBackgroundBrush");
+
+            var list = new System.Windows.Controls.StackPanel();
+
+            for (int i = 0; i < meta.Labels.Count && i < meta.StaticData.Count; i++)
+            {
+                var label = meta.Labels[i];
+                var value = meta.StaticData[i];
+                var idx = i;
+
+                var row = new Border
+                {
+                    Padding = new Thickness(12, 7, 12, 7),
+                    Background = System.Windows.Media.Brushes.Transparent,
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    Tag = (label, meta)
+                };
+
+                var rowGrid = new Grid();
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var nameBlock = new System.Windows.Controls.TextBlock
+                {
+                    Text = label,
+                    FontSize = labelSize,
+                    FontFamily = new System.Windows.Media.FontFamily(meta.RankListLabelFont),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                if (!string.IsNullOrEmpty(meta.RankListLabelColor))
+                    nameBlock.Foreground = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(meta.RankListLabelColor));
+                else
+                    nameBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+
+                var valBlock = new System.Windows.Controls.TextBlock
+                {
+                    Text = value.ToString("N0") + "원",
+                    FontSize = valueSize,
+                    FontFamily = new System.Windows.Media.FontFamily(meta.RankListValueFont),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 0, 0, 0),
+                    FontWeight = FontWeights.SemiBold
+                };
+                if (!string.IsNullOrEmpty(meta.RankListValueColor))
+                    valBlock.Foreground = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(meta.RankListValueColor));
+                else
+                    valBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "StatusBarBorderBrush");
+
+                Grid.SetColumn(nameBlock, 0);
+                Grid.SetColumn(valBlock, 1);
+                rowGrid.Children.Add(nameBlock);
+                rowGrid.Children.Add(valBlock);
+                row.Child = rowGrid;
+
+                row.MouseEnter += (s, _) =>
+                {
+                    var hb = (System.Windows.Application.Current.Resources["ContextMenuBorderBrush"] as System.Windows.Media.Brush)
+                             ?? System.Windows.Media.Brushes.DimGray;
+                    ((Border)s).Background = hb;
+                };
+                row.MouseLeave  += (s, _) => ((Border)s).Background = System.Windows.Media.Brushes.Transparent;
+                row.MouseLeftButtonUp += (s, _) =>
+                {
+                    var (lbl, m) = ((string, ChartMeta))((Border)s).Tag;
+                    ShowRankDetailWindow(lbl, m);
+                };
+
+                if (idx > 0)
+                {
+                    var sep = new System.Windows.Shapes.Rectangle { Height = 1, Margin = new Thickness(8, 0, 8, 0) };
+                    sep.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "ContextMenuBorderBrush");
+                    list.Children.Add(sep);
+                }
+                list.Children.Add(row);
+            }
+
+            if (meta.Labels.Count == 0)
+            {
+                var emptyBlock = new System.Windows.Controls.TextBlock
+                {
+                    Text = "데이터 없음", Opacity = 0.5,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 16, 0, 16), FontSize = labelSize
+                };
+                emptyBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                list.Children.Add(emptyBlock);
+            }
+
+            outer.Children.Add(list);
+
+            var sv = new System.Windows.Controls.ScrollViewer
+            {
+                Content = outer,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
+            };
+            return sv;
+        }
+
+        private void ShowRankDetailWindow(string groupValue, ChartMeta meta)
+        {
+            var cs = DatabaseService.DataConnectionString;
+            if (string.IsNullOrWhiteSpace(cs))
+            {
+                System.Windows.MessageBox.Show("데이터 DB가 설정되지 않았습니다.");
+                return;
+            }
+
+            var groupBy = AllowedGroupByColumns.Contains(meta.DbGroupBy ?? "") ? meta.DbGroupBy! : "매장명";
+            var start   = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+            var end     = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
+
+            // 원본 레코드 조회
+            var rows = new System.Data.DataTable();
+            try
+            {
+                var sql = $@"SELECT 날짜, 매장명, 중분류, 메뉴명, 총매출액, 총수량, 판매수량, 서비스수량
+FROM 매출데이터
+WHERE 날짜 BETWEEN @start AND @end AND [{groupBy}] = @groupVal
+ORDER BY 날짜 DESC";
+                using var conn = new SqlConnection(cs);
+                conn.Open();
+                using var adapter = new SqlDataAdapter(sql, conn);
+                adapter.SelectCommand.Parameters.AddWithValue("@start",    start.Date);
+                adapter.SelectCommand.Parameters.AddWithValue("@end",      end.Date);
+                adapter.SelectCommand.Parameters.AddWithValue("@groupVal", groupValue);
+                adapter.Fill(rows);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"조회 오류: {ex.Message}");
+                return;
+            }
+
+            // 테마 색상 가져오기
+            var res2 = System.Windows.Application.Current.Resources;
+            var winBg   = (res2["WindowBackgroundBrush"]   as System.Windows.Media.Brush) ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(22, 22, 30));
+            var barBg   = (res2["ContextMenuBorderBrush"]  as System.Windows.Media.Brush) ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(32, 32, 44));
+            var fg2     = (res2["ForegroundBrush"]         as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.White;
+            var accent2 = (res2["StatusBarBorderBrush"]    as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
+            var altRow  = (res2["ContextMenuBorderBrush"]  as System.Windows.Media.Brush) ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(36, 36, 48));
+
+            // 팝업 창 구성
+            var win = new System.Windows.Window
+            {
+                Title = groupValue,
+                Width = 820, Height = 600,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ShowInTaskbar = false,
+                Background = System.Windows.Media.Brushes.Transparent,
+                WindowStyle = System.Windows.WindowStyle.None,
+                AllowsTransparency = true,
+                ResizeMode = System.Windows.ResizeMode.CanResizeWithGrip
+            };
+
+            var outerBorder2 = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10) };
+            outerBorder2.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
+            outerBorder2.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+            var root = new System.Windows.Controls.DockPanel();
+            outerBorder2.Child = root;
+
+            // 타이틀바
+            var titleBar = new Border { Height = 38, CornerRadius = new CornerRadius(10, 10, 0, 0) };
+            titleBar.SetResourceReference(Border.BackgroundProperty, "StatusBarBackgroundBrush");
+            titleBar.MouseLeftButtonDown += (s, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
+            var titleRow = new Grid();
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+            var titleTb = new System.Windows.Controls.TextBlock
+            {
+                Text = $"{groupValue}  ({start:yyyy-MM-dd} ~ {end:yyyy-MM-dd})",
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                TextAlignment = System.Windows.TextAlignment.Center,
+                Foreground = System.Windows.Media.Brushes.White
+            };
+            var closeHost = new Border
+            {
+                Width = 36, Height = 28,
+                Background = System.Windows.Media.Brushes.Transparent,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Opacity = 0.75
+            };
+            var closeTb = new System.Windows.Controls.TextBlock
+            {
+                Text = "✕", FontSize = 14, FontWeight = FontWeights.Bold,
+                Foreground = System.Windows.Media.Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+            };
+            closeHost.Child = closeTb;
+            closeHost.MouseEnter += (s, e) => { ((Border)s).Opacity = 1.0; ((Border)s).Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 255, 255, 255)); };
+            closeHost.MouseLeave += (s, e) => { ((Border)s).Opacity = 0.75; ((Border)s).Background = System.Windows.Media.Brushes.Transparent; };
+            closeHost.PreviewMouseLeftButtonDown += (s, e) => { win.Close(); e.Handled = true; };
+            Grid.SetColumn(titleTb, 1);
+            Grid.SetColumn(closeHost, 2);
+            titleRow.Children.Add(titleTb);
+            titleRow.Children.Add(closeHost);
+            titleBar.Child = titleRow;
+            System.Windows.Controls.DockPanel.SetDock(titleBar, System.Windows.Controls.Dock.Top);
+            root.Children.Add(titleBar);
+
+            // 열 선택 패널
+            var colPanel = new WrapPanel { Margin = new Thickness(10, 8, 10, 4) };
+            System.Windows.Controls.DockPanel.SetDock(colPanel, System.Windows.Controls.Dock.Top);
+            root.Children.Add(colPanel);
+
+            var grid = new System.Windows.Controls.DataGrid
+            {
+                AutoGenerateColumns = false,
+                IsReadOnly = true,
+                CanUserReorderColumns = true,
+                CanUserResizeColumns = true,
+                CanUserSortColumns = true,
+                BorderThickness = new Thickness(0),
+                Margin = new Thickness(8, 0, 8, 8),
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto
+            };
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.BackgroundProperty, "WindowBackgroundBrush");
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.ForegroundProperty, "ForegroundBrush");
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.RowBackgroundProperty, "WindowBackgroundBrush");
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.AlternatingRowBackgroundProperty, "ContextMenuBorderBrush");
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.HorizontalGridLinesBrushProperty, "ContextMenuBorderBrush");
+            grid.SetResourceReference(System.Windows.Controls.DataGrid.VerticalGridLinesBrushProperty, "ContextMenuBorderBrush");
+
+            // 셀 스타일 — MaterialDesign이 ForegroundBrush를 덮어쓰지 않도록 명시
+            var cellStyle = new Style(typeof(System.Windows.Controls.DataGridCell));
+            cellStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BorderThicknessProperty, new Thickness(0)));
+            cellStyle.Setters.Add(new Setter(System.Windows.Controls.TextBlock.ForegroundProperty, fg2));
+            grid.CellStyle = cellStyle;
+
+            // 열 헤더 스타일 (테마)
+            var headerStyle = new Style(typeof(System.Windows.Controls.Primitives.DataGridColumnHeader));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BackgroundProperty, barBg));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.ForegroundProperty, fg2));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.FontWeightProperty, FontWeights.SemiBold));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BorderBrushProperty, barBg));
+            headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.HorizontalContentAlignmentProperty, System.Windows.HorizontalAlignment.Center));
+            grid.ColumnHeaderStyle = headerStyle;
+
+            var colHeaderCbMap = new Dictionary<string, System.Windows.Controls.CheckBox>();
+
+            void SaveColumnWidths()
+            {
+                foreach (var dgCol in grid.Columns)
+                {
+                    if (dgCol.Header is string h && dgCol.ActualWidth > 0)
+                        meta.RankListColumnWidths[h] = dgCol.ActualWidth;
+                }
+                SaveAllChartStates();
+            }
+
+            void RebuildColumns()
+            {
+                grid.Columns.Clear();
+                foreach (var col in AllRawColumns)
+                {
+                    if (!meta.RankListVisibleColumns.Contains(col)) continue;
+                    if (!rows.Columns.Contains(col)) continue;
+
+                    double savedW = meta.RankListColumnWidths.TryGetValue(col, out var w) ? w : 0;
+                    System.Windows.Controls.DataGridLength colWidth = savedW > 0
+                        ? new System.Windows.Controls.DataGridLength(savedW)
+                        : col == "날짜"
+                            ? new System.Windows.Controls.DataGridLength(100)
+                            : new System.Windows.Controls.DataGridLength(130);
+
+                    var dgCol = col == "날짜"
+                        ? (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
+                          {
+                              Header = col,
+                              Binding = new System.Windows.Data.Binding($"[{col}]") { StringFormat = "yyyy-MM-dd" },
+                              Width = colWidth
+                          }
+                        : (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
+                          {
+                              Header = col,
+                              Binding = new System.Windows.Data.Binding($"[{col}]")
+                              {
+                                  StringFormat = (col == "총매출액" || col == "총수량" || col == "판매수량" || col == "서비스수량") ? "N0" : null
+                              },
+                              Width = colWidth
+                          };
+                    grid.Columns.Add(dgCol);
+                }
+            }
+
+            // 열 선택 체크박스 생성
+            foreach (var col in AllRawColumns)
+            {
+                var cb = new System.Windows.Controls.CheckBox
+                {
+                    Content = col,
+                    IsChecked = meta.RankListVisibleColumns.Contains(col),
+                    Margin = new Thickness(6, 3, 12, 3),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                cb.SetResourceReference(System.Windows.Controls.CheckBox.ForegroundProperty, "ForegroundBrush");
+                cb.Checked   += (_, _) => { if (!meta.RankListVisibleColumns.Contains(col)) meta.RankListVisibleColumns.Add(col); RebuildColumns(); SaveAllChartStates(); };
+                cb.Unchecked += (_, _) => { meta.RankListVisibleColumns.Remove(col); RebuildColumns(); SaveAllChartStates(); };
+                colPanel.Children.Add(cb);
+                colHeaderCbMap[col] = cb;
+            }
+
+            // DataGrid 데이터 바인딩
+            grid.ItemsSource = rows.DefaultView;
+            RebuildColumns();
+            root.Children.Add(grid);
+
+            win.Content = outerBorder2;
+            win.Closing += (_, _) => SaveColumnWidths();
+            win.ShowDialog();
         }
 
         private PieChart CreatePieChart(ChartMeta meta)
@@ -3205,12 +3775,13 @@ namespace WpfApp2
 
                         FrameworkElement? newChart = meta.ChartType switch
                         {
-                            "Line"  => CreateLineChart(meta),
-                            "Bar"   => CreateBarChart(meta),
-                            "HBar"  => CreateHBarChart(meta),
-                            "Pie"   => CreatePieChart(meta),
-                            "Gauge" => CreateGaugeChart(meta),
-                            _       => null
+                            "Line"     => CreateLineChart(meta),
+                            "Bar"      => CreateBarChart(meta),
+                            "HBar"     => CreateHBarChart(meta),
+                            "Pie"      => CreatePieChart(meta),
+                            "Gauge"    => CreateGaugeChart(meta),
+                            "RankList" => CreateRankList(meta),
+                            _          => null
                         };
                         if (newChart != null)
                         {
@@ -3469,163 +4040,521 @@ namespace WpfApp2
 
         private void EditChartDialog(Border border, Canvas canvas, ChartMeta meta)
         {
-            // 기존 ShowChartConfigDialog를 재활용하여 편집 모드로 사용
+            try { EditChartDialogImpl(border, canvas, meta); }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"차트 수정 창 오류:\n{ex.GetType().Name}\n{ex.Message}\n\n{ex.StackTrace?.Split('\n')[0]}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void EditChartDialogImpl(Border border, Canvas canvas, ChartMeta meta)
+        {
             var configDlg = new System.Windows.Window
             {
-                Title = $"{meta.ChartType} 차트 수정",
                 WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
                 Owner = this,
                 ResizeMode = System.Windows.ResizeMode.NoResize,
-                SizeToContent = SizeToContent.WidthAndHeight,
-                Width = 450
+                Width = 480,
+                MaxHeight = SystemParameters.PrimaryScreenHeight * 0.88,
+                SizeToContent = SizeToContent.Height,
+                Background = System.Windows.Media.Brushes.Transparent,
+                WindowStyle = System.Windows.WindowStyle.None,
+                AllowsTransparency = true
             };
-            MakeBorderless(configDlg);
 
-            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+            // ── 로컬 헬퍼 ──────────────────────────────────────────────────────
+            var res = System.Windows.Application.Current.Resources;
+            var cardBg  = (res["ContextMenuBorderBrush"]   as System.Windows.Media.Brush) ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(42, 42, 56));
+            var winBg   = (res["WindowBackgroundBrush"]    as System.Windows.Media.Brush) ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(26, 26, 36));
+            var fg      = (res["ForegroundBrush"]          as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.White;
+            var accent  = (res["StatusBarBorderBrush"]     as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.SteelBlue;
+            var sepBrush = (res["StatusBarBorderBrush"] as System.Windows.Media.SolidColorBrush)?.Color is System.Windows.Media.Color ac
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(60, ac.R, ac.G, ac.B))
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(60, 100, 140, 200));
 
-            // 데이터 수정 (정적 데이터만)
+            System.Windows.Controls.ComboBox MakeCombo(string selected, params string[] items)
+            {
+                var cb = new System.Windows.Controls.ComboBox { Style = null, Margin = new Thickness(0), Height = 28 };
+                cb.SetResourceReference(System.Windows.Controls.ComboBox.BackgroundProperty, "ContextMenuBackgroundBrush");
+                cb.SetResourceReference(System.Windows.Controls.ComboBox.ForegroundProperty, "ForegroundBrush");
+                foreach (var it in items) cb.Items.Add(it);
+                cb.SelectedItem = selected;
+                if (cb.SelectedIndex < 0 && items.Length > 0) cb.SelectedIndex = 0;
+                return cb;
+            }
+
+            System.Windows.Controls.ComboBox MakeFontCombo(string cur)
+            {
+                var c = BuildChartFontCombo(cur); c.Margin = new Thickness(0); c.Height = 28; return c;
+            }
+            System.Windows.Controls.ComboBox MakeSizeCombo(double cur)
+            {
+                var c = BuildChartSizeCombo(cur); c.Margin = new Thickness(0); c.Height = 28; return c;
+            }
+
+            // 2-컬럼 라벨+컨트롤 행
+            Grid LRow(string label, UIElement ctrl, double lw = 78)
+            {
+                var g = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(lw) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var tb = new System.Windows.Controls.TextBlock
+                {
+                    Text = label, FontSize = 12, Opacity = 0.75,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                tb.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                Grid.SetColumn(tb, 0); Grid.SetColumn(ctrl, 1);
+                g.Children.Add(tb); g.Children.Add(ctrl);
+                return g;
+            }
+
+            // 섹션 카드
+            Border SectionCard(string title, System.Windows.Controls.StackPanel body)
+            {
+                var hdr = new System.Windows.Controls.TextBlock
+                {
+                    Text = title, FontSize = 11, FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 0, 0, 10), Opacity = 0.55
+                };
+                hdr.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                var inner = new System.Windows.Controls.StackPanel();
+                inner.Children.Add(hdr);
+                var childList = body.Children.Cast<UIElement>().ToList();
+                body.Children.Clear();
+                foreach (UIElement child in childList) inner.Children.Add(child);
+                var card = new Border
+                {
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(14, 12, 14, 4),
+                    Margin = new Thickness(0, 0, 0, 8),
+                    Background = cardBg,
+                    Child = inner
+                };
+                return card;
+            }
+
+            // 색상 스와치 피커
+            string? chosenColorHex = meta.ChartLabelColor;
+            List<Border> swatches = new();
+
+            FrameworkElement BuildColorPicker(System.Action onChanged)
+            {
+                var panel = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
+                swatches.Clear();
+
+                void Refresh()
+                {
+                    foreach (var sw in swatches)
+                    {
+                        bool sel = (sw.Tag as string) == chosenColorHex ||
+                                   (sw.Tag == null && chosenColorHex == null);
+                        sw.BorderThickness = new Thickness(sel ? 2.5 : 0);
+                        sw.BorderBrush = System.Windows.Media.Brushes.White;
+                        sw.Opacity = sel ? 1.0 : 0.75;
+                    }
+                }
+
+                foreach (var (label, hex) in ChartColorPresets)
+                {
+                    System.Windows.Media.Brush swBg;
+                    UIElement? inner = null;
+                    if (hex == null)
+                    {
+                        swBg = new System.Windows.Media.LinearGradientBrush(
+                            new System.Windows.Media.GradientStopCollection {
+                                new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(255,90,90), 0),
+                                new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(90,200,255), 0.5),
+                                new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(255,220,80), 1)
+                            }, 45);
+                        inner = new System.Windows.Controls.TextBlock
+                        {
+                            Text = "A", FontSize = 10, FontWeight = FontWeights.Bold,
+                            Foreground = System.Windows.Media.Brushes.White,
+                            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                    }
+                    else
+                    {
+                        swBg = new System.Windows.Media.SolidColorBrush(
+                            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+                    }
+
+                    var swatch = new Border
+                    {
+                        Width = 26, Height = 26,
+                        CornerRadius = new CornerRadius(5),
+                        Margin = new Thickness(0, 0, 5, 5),
+                        Background = swBg,
+                        Cursor = System.Windows.Input.Cursors.Hand,
+                        Tag = hex,
+                        ToolTip = label,
+                        Child = inner
+                    };
+
+                    swatch.MouseLeftButtonUp += (s, _) =>
+                    {
+                        chosenColorHex = ((Border)s).Tag as string;
+                        Refresh();
+                        onChanged();
+                    };
+                    swatches.Add(swatch);
+                    panel.Children.Add(swatch);
+                }
+                Refresh();
+                return panel;
+            }
+
+            // ── 외부 Border + DockPanel ──────────────────────────────────────
+            var outerBorder = new Border { CornerRadius = new CornerRadius(14), BorderThickness = new Thickness(1), Background = winBg };
+            outerBorder.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+            var outerDock = new System.Windows.Controls.DockPanel();
+            outerBorder.Child = outerDock;
+
+            // 타이틀바
+            string typeLabel = meta.ChartType switch
+            {
+                "Line" => "선 그래프", "Bar" => "세로 막대", "HBar" => "가로 막대",
+                "Pie" => "원형 차트", "Gauge" => "게이지", "RankList" => "순위표", _ => meta.ChartType
+            };
+            var titleBar2 = new Border { Height = 44, Padding = new Thickness(18, 0, 10, 0), Background = winBg };
+            titleBar2.MouseLeftButtonDown += (s, e) => { if (e.ButtonState == MouseButtonState.Pressed) configDlg.DragMove(); };
+            var tg = new Grid();
+            tg.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            tg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var ttb = new System.Windows.Controls.TextBlock
+            {
+                Text = $"{typeLabel} 수정", FontSize = 14, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            ttb.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+            var xb = new System.Windows.Controls.Button
+            {
+                Content = "✕", Width = 32, Height = 32, BorderThickness = new Thickness(0),
+                Background = System.Windows.Media.Brushes.Transparent, FontSize = 13,
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            xb.SetResourceReference(System.Windows.Controls.Button.ForegroundProperty, "ForegroundBrush");
+            xb.Click += (_, _) => configDlg.Close();
+            Grid.SetColumn(ttb, 0); Grid.SetColumn(xb, 1);
+            tg.Children.Add(ttb); tg.Children.Add(xb);
+            titleBar2.Child = tg;
+            System.Windows.Controls.DockPanel.SetDock(titleBar2, System.Windows.Controls.Dock.Top);
+            outerDock.Children.Add(titleBar2);
+
+            // 타이틀 구분선
+            var titleLine = new System.Windows.Shapes.Rectangle { Height = 1, Fill = sepBrush };
+            System.Windows.Controls.DockPanel.SetDock(titleLine, System.Windows.Controls.Dock.Top);
+            outerDock.Children.Add(titleLine);
+
+            // 버튼 바 (하단)
+            var btnBarBorder = new Border { Padding = new Thickness(16, 10, 16, 14), Background = winBg };
+            var btnRow = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+            };
+
+            var applyBtn = new System.Windows.Controls.Button
+            {
+                Content = "적용", Padding = new Thickness(20, 7, 20, 7),
+                Margin = new Thickness(8, 0, 0, 0), FontWeight = FontWeights.SemiBold
+            };
+            applyBtn.SetResourceReference(System.Windows.Controls.Button.BackgroundProperty, "StatusBarBackgroundBrush");
+            applyBtn.Foreground = System.Windows.Media.Brushes.White;
+            applyBtn.BorderThickness = new Thickness(0);
+
+            var cancelBtn2 = new System.Windows.Controls.Button
+            {
+                Content = "취소", Padding = new Thickness(16, 7, 16, 7),
+                Background = cardBg, BorderThickness = new Thickness(0)
+            };
+            cancelBtn2.SetResourceReference(System.Windows.Controls.Button.ForegroundProperty, "ForegroundBrush");
+            cancelBtn2.Click += (_, _) => configDlg.Close();
+
+            btnRow.Children.Add(cancelBtn2); btnRow.Children.Add(applyBtn);
+            btnBarBorder.Child = btnRow;
+            System.Windows.Controls.DockPanel.SetDock(btnBarBorder, System.Windows.Controls.Dock.Bottom);
+            outerDock.Children.Add(btnBarBorder);
+
+            // 스크롤 콘텐츠
+            var sv3 = new System.Windows.Controls.ScrollViewer
+            {
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
+            };
+            var mainStack = new System.Windows.Controls.StackPanel { Margin = new Thickness(14, 10, 14, 6) };
+            sv3.Content = mainStack;
+            outerDock.Children.Add(sv3);
+
+            // ── 섹션 구성 ──────────────────────────────────────────────────────
             if (meta.DataSource == "Static")
             {
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "데이터 값 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
-                var dataBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.StaticData), Margin = new Thickness(0, 0, 0, 8) };
-                stack.Children.Add(dataBox);
+                // 데이터 섹션
+                var dataBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.StaticData), Height = 28 };
+                dataBox.SetResourceReference(System.Windows.Controls.TextBox.BackgroundProperty, "ContextMenuBackgroundBrush");
+                dataBox.SetResourceReference(System.Windows.Controls.TextBox.ForegroundProperty, "ForegroundBrush");
+                var labelBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.Labels), Height = 28 };
+                labelBox.SetResourceReference(System.Windows.Controls.TextBox.BackgroundProperty, "ContextMenuBackgroundBrush");
+                labelBox.SetResourceReference(System.Windows.Controls.TextBox.ForegroundProperty, "ForegroundBrush");
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "라벨 (쉼표로 구분):", Margin = new Thickness(0, 0, 0, 4) });
-                var labelBox = new System.Windows.Controls.TextBox { Text = string.Join(", ", meta.Labels), Margin = new Thickness(0, 0, 0, 12) };
-                stack.Children.Add(labelBox);
+                var dataBody = new System.Windows.Controls.StackPanel();
+                dataBody.Children.Add(LRow("데이터 값", dataBox));
+                dataBody.Children.Add(LRow("라벨", labelBox));
+                mainStack.Children.Add(SectionCard("데이터", dataBody));
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 글꼴:", Margin = new Thickness(0, 0, 0, 4) });
-                var sFontCombo = BuildChartFontCombo(meta.ChartFont);
-                stack.Children.Add(sFontCombo);
+                // 스타일 섹션
+                var sFontCombo = MakeFontCombo(meta.ChartFont);
+                var sSizeCombo = MakeSizeCombo(meta.ChartLabelSize);
+                var colorPicker = BuildColorPicker(() => { });
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 색상:", Margin = new Thickness(0, 0, 0, 4) });
-                var sColorCombo = BuildChartColorCombo(meta.ChartLabelColor);
-                stack.Children.Add(sColorCombo);
+                var styleBody = new System.Windows.Controls.StackPanel();
+                styleBody.Children.Add(LRow("글꼴", sFontCombo));
+                styleBody.Children.Add(LRow("크기", sSizeCombo));
+                var colorLRow = LRow("글씨 색상", colorPicker, 78);
+                colorLRow.Margin = new Thickness(0, 0, 0, 4);
+                styleBody.Children.Add(colorLRow);
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 크기:", Margin = new Thickness(0, 0, 0, 4) });
-                var sSizeCombo = BuildChartSizeCombo(meta.ChartLabelSize);
-                stack.Children.Add(sSizeCombo);
-
-                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
-                var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
-                var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+                System.Windows.Controls.CheckBox? showBarsCheck = null;
+                if (meta.ChartType == "HBar")
+                {
+                    showBarsCheck = new System.Windows.Controls.CheckBox
+                    {
+                        Content = "막대 표시", IsChecked = meta.ShowBars, Margin = new Thickness(0, 4, 0, 4)
+                    };
+                    showBarsCheck.SetResourceReference(System.Windows.Controls.CheckBox.ForegroundProperty, "ForegroundBrush");
+                    styleBody.Children.Add(showBarsCheck);
+                }
+                mainStack.Children.Add(SectionCard("스타일", styleBody));
 
                 applyBtn.Click += (s, ev) =>
                 {
                     meta.StaticData = dataBox.Text.Split(',').Select(x => double.TryParse(x.Trim(), out var v) ? v : 0).ToList();
                     meta.Labels = labelBox.Text.Split(',').Select(x => x.Trim()).ToList();
                     meta.ChartFont = sFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
-                    meta.ChartLabelColor = ChartColorPresets[sColorCombo.SelectedIndex].Hex;
+                    meta.ChartLabelColor = chosenColorHex;
                     meta.ChartLabelSize = sSizeCombo.SelectedItem?.ToString() is string sv && double.TryParse(sv, out var sd) ? sd : 0;
-
-                    // 차트 다시 생성
-                    FrameworkElement newChart = null;
+                    if (showBarsCheck != null) meta.ShowBars = showBarsCheck.IsChecked == true;
+                    FrameworkElement? nc = null;
                     switch (meta.ChartType)
                     {
-                        case "Line": newChart = CreateLineChart(meta); break;
-                        case "Bar": newChart = CreateBarChart(meta); break;
-                        case "HBar": newChart = CreateHBarChart(meta); break;
-                        case "Pie": newChart = CreatePieChart(meta); break;
-                        case "Gauge": newChart = CreateGaugeChart(meta); break;
+                        case "Line": nc = CreateLineChart(meta); break; case "Bar": nc = CreateBarChart(meta); break;
+                        case "HBar": nc = CreateHBarChart(meta); break; case "Pie": nc = CreatePieChart(meta); break;
+                        case "Gauge": nc = CreateGaugeChart(meta); break; case "RankList": nc = CreateRankList(meta); break;
                     }
-                    if (newChart != null)
-                    {
-                        if (meta.InnerHeight > 0 &&
-                            newChart is System.Windows.Controls.ScrollViewer svEdit1 &&
-                            svEdit1.Content is CartesianChart ccEdit1)
-                            ApplyInnerChartHeight(ccEdit1, meta);
-                        border.Child = WrapWithDbDates(newChart, meta);
-                    }
-
-                    SaveAllChartStates();
-                    configDlg.Close();
+                    if (nc != null) { if (meta.InnerHeight > 0 && nc is System.Windows.Controls.ScrollViewer sv2 && sv2.Content is CartesianChart cc2) ApplyInnerChartHeight(cc2, meta); border.Child = WrapWithDbDates(nc, meta); }
+                    SaveAllChartStates(); configDlg.Close();
                 };
-                cancelBtn.Click += (s, ev) => configDlg.Close();
-
-                btnPanel.Children.Add(applyBtn);
-                btnPanel.Children.Add(cancelBtn);
-                stack.Children.Add(btnPanel);
             }
-            else if (meta.DataSource == "Db")
+            else if (meta.DataSource == "Db" || meta.ChartType == "RankList")
             {
-                // 집계 기준
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 기준:", Margin = new Thickness(0, 0, 0, 4) });
-                var eGroupByCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eGroupByCombo.Style = null;
-                eGroupByCombo.Items.Add("매장명"); eGroupByCombo.Items.Add("중분류"); eGroupByCombo.Items.Add("메뉴명");
-                eGroupByCombo.SelectedItem = meta.DbGroupBy ?? "매장명";
-                stack.Children.Add(eGroupByCombo);
+                // 집계 섹션
+                var eGroupByCombo = MakeCombo(meta.DbGroupBy ?? "매장명", "매장명", "중분류", "메뉴명");
+                var eValueCombo   = MakeCombo(meta.DbValueColumn ?? "총매출액", "총매출액", "총수량", "판매수량", "서비스수량");
+                var eSortCombo    = MakeCombo(meta.DbSortAscending ? "오름차순 (낮은 값 먼저)" : "내림차순 (높은 값 먼저)",
+                                             "내림차순 (높은 값 먼저)", "오름차순 (낮은 값 먼저)");
+                var aggBody = new System.Windows.Controls.StackPanel();
+                aggBody.Children.Add(LRow("기준", eGroupByCombo));
+                aggBody.Children.Add(LRow("컬럼", eValueCombo));
+                aggBody.Children.Add(LRow("정렬", eSortCombo));
+                mainStack.Children.Add(SectionCard("집계", aggBody));
 
-                // 집계 컬럼
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "집계 컬럼:", Margin = new Thickness(0, 0, 0, 4) });
-                var eValueCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eValueCombo.Style = null;
-                eValueCombo.Items.Add("총매출액"); eValueCombo.Items.Add("총수량"); eValueCombo.Items.Add("판매수량"); eValueCombo.Items.Add("서비스수량");
-                eValueCombo.SelectedItem = meta.DbValueColumn ?? "총매출액";
-                stack.Children.Add(eValueCombo);
+                // 기간 섹션
+                var eStartDate = new System.Windows.Controls.DatePicker { Height = 28, Margin = new Thickness(0, 0, 6, 0), SelectedDate = meta.DbStartDate ?? DateTime.Today.AddDays(-7) };
+                var eEndDate   = new System.Windows.Controls.DatePicker { Height = 28, SelectedDate = meta.DbEndDate ?? DateTime.Today.AddDays(-1) };
+                var dateRow = new Grid();
+                dateRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                dateRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                dateRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var sepTb = new System.Windows.Controls.TextBlock { Text = "~", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0), FontSize = 14 };
+                sepTb.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                Grid.SetColumn(eStartDate, 0); Grid.SetColumn(sepTb, 1); Grid.SetColumn(eEndDate, 2);
+                dateRow.Children.Add(eStartDate); dateRow.Children.Add(sepTb); dateRow.Children.Add(eEndDate);
+                var dateBody = new System.Windows.Controls.StackPanel();
+                dateBody.Children.Add(dateRow);
+                mainStack.Children.Add(SectionCard("기간", dateBody));
 
-                // 날짜
-                var eDateRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-                eDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "시작:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-                var eStartDate = new System.Windows.Controls.DatePicker { Width = 110, Margin = new Thickness(0, 0, 10, 0), SelectedDate = meta.DbStartDate ?? DateTime.Today.AddDays(-7) };
-                eDateRow.Children.Add(eStartDate);
-                eDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "종료:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-                var eEndDate = new System.Windows.Controls.DatePicker { Width = 110, SelectedDate = meta.DbEndDate ?? DateTime.Today.AddDays(-1) };
-                eDateRow.Children.Add(eEndDate);
-                stack.Children.Add(eDateRow);
+                // 필터 섹션
+                var eStoreBox = MakeCombo(meta.DbStoreName ?? "(전체)", new[] { "(전체)" }.Concat(LoadDbDistinctValues("매장명")).ToArray());
+                var eMiddleCatBox = MakeCombo(meta.DbMiddleCategoryFilter ?? "(전체)", new[] { "(전체)" }.Concat(LoadDbDistinctValues("중분류")).ToArray());
+                var eMenuBox = MakeCombo(meta.DbMenuNameFilter ?? "(전체)", new[] { "(전체)" }.Concat(LoadDbDistinctValues("메뉴명")).ToArray());
+                var filterBody = new System.Windows.Controls.StackPanel();
+                filterBody.Children.Add(LRow("매장명", eStoreBox));
+                filterBody.Children.Add(LRow("중분류", eMiddleCatBox));
+                filterBody.Children.Add(LRow("메뉴명", eMenuBox));
+                mainStack.Children.Add(SectionCard("필터", filterBody));
 
-                // 필터들 (ComboBox - DB에서 값 가져옴)
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "매장명 필터:", Margin = new Thickness(0, 0, 0, 4) });
-                var eStoreBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eStoreBox.Style = null;
-                eStoreBox.Items.Add("(전체)");
-                foreach (var v in LoadDbDistinctValues("매장명")) eStoreBox.Items.Add(v);
-                eStoreBox.SelectedItem = meta.DbStoreName ?? "(전체)";
-                if (eStoreBox.SelectedIndex < 0) eStoreBox.SelectedIndex = 0;
-                stack.Children.Add(eStoreBox);
+                // 스타일 섹션 (RankList는 별도)
+                System.Windows.Controls.ComboBox? eFontCombo = null, eSizeCombo = null;
+                System.Windows.Controls.ComboBox? rankLabelFontCombo = null, rankLabelSizeCombo = null;
+                System.Windows.Controls.ComboBox? rankValueFontCombo = null, rankValueSizeCombo = null;
+                System.Windows.Controls.CheckBox? dbShowBarsCheck = null;
+                string? chosenLabelColorHex = meta.RankListLabelColor;
+                string? chosenValueColorHex = meta.RankListValueColor;
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "중분류 필터:", Margin = new Thickness(0, 0, 0, 4) });
-                var eMiddleCatBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eMiddleCatBox.Style = null;
-                eMiddleCatBox.Items.Add("(전체)");
-                foreach (var v in LoadDbDistinctValues("중분류")) eMiddleCatBox.Items.Add(v);
-                eMiddleCatBox.SelectedItem = meta.DbMiddleCategoryFilter ?? "(전체)";
-                if (eMiddleCatBox.SelectedIndex < 0) eMiddleCatBox.SelectedIndex = 0;
-                stack.Children.Add(eMiddleCatBox);
+                if (meta.ChartType == "RankList")
+                {
+                    rankLabelFontCombo = MakeFontCombo(meta.RankListLabelFont);
+                    rankLabelSizeCombo = MakeSizeCombo(meta.RankListLabelSize);
+                    rankValueFontCombo = MakeFontCombo(meta.RankListValueFont);
+                    rankValueSizeCombo = MakeSizeCombo(meta.RankListValueSize);
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "메뉴명 필터:", Margin = new Thickness(0, 0, 0, 4) });
-                var eMenuBox = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eMenuBox.Style = null;
-                eMenuBox.Items.Add("(전체)");
-                foreach (var v in LoadDbDistinctValues("메뉴명")) eMenuBox.Items.Add(v);
-                eMenuBox.SelectedItem = meta.DbMenuNameFilter ?? "(전체)";
-                if (eMenuBox.SelectedIndex < 0) eMenuBox.SelectedIndex = 0;
-                stack.Children.Add(eMenuBox);
+                    // 색상 스와치 피커 (기준용 / 컬럼용 각각)
+                    List<Border> labelSwatches = new();
+                    List<Border> valueSwatches = new();
 
-                // 정렬
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "정렬:", Margin = new Thickness(0, 0, 0, 4) });
-                var eSortCombo = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 8) };
-                eSortCombo.Style = null;
-                eSortCombo.Items.Add("내림차순 (높은 값 먼저)");
-                eSortCombo.Items.Add("오름차순 (낮은 값 먼저)");
-                eSortCombo.SelectedIndex = meta.DbSortAscending ? 1 : 0;
-                stack.Children.Add(eSortCombo);
+                    FrameworkElement BuildRankColorPicker(List<Border> swatchList, ref string? chosen, System.Action refresh)
+                    {
+                        var panel = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
+                        swatchList.Clear();
+                        foreach (var (lbl, hex) in ChartColorPresets)
+                        {
+                            System.Windows.Media.Brush swBg;
+                            UIElement? swInner = null;
+                            if (hex == null)
+                            {
+                                swBg = new System.Windows.Media.LinearGradientBrush(
+                                    new System.Windows.Media.GradientStopCollection {
+                                        new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(255,90,90), 0),
+                                        new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(90,200,255), 0.5),
+                                        new System.Windows.Media.GradientStop(System.Windows.Media.Color.FromRgb(255,220,80), 1)
+                                    }, 45);
+                                swInner = new System.Windows.Controls.TextBlock
+                                {
+                                    Text = "A", FontSize = 10, FontWeight = FontWeights.Bold,
+                                    Foreground = System.Windows.Media.Brushes.White,
+                                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                                    VerticalAlignment = VerticalAlignment.Center
+                                };
+                            }
+                            else
+                            {
+                                swBg = new System.Windows.Media.SolidColorBrush(
+                                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+                            }
+                            var sw = new Border
+                            {
+                                Width = 22, Height = 22, CornerRadius = new CornerRadius(4),
+                                Margin = new Thickness(0, 0, 4, 4),
+                                Background = swBg, Cursor = System.Windows.Input.Cursors.Hand,
+                                Tag = hex, ToolTip = lbl, Child = swInner
+                            };
+                            swatchList.Add(sw);
+                            panel.Children.Add(sw);
+                        }
+                        refresh();
+                        return panel;
+                    }
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "차트 글꼴:", Margin = new Thickness(0, 4, 0, 4) });
-                var eFontCombo = BuildChartFontCombo(meta.ChartFont);
-                stack.Children.Add(eFontCombo);
+                    void RefreshLabel()
+                    {
+                        foreach (var sw in labelSwatches)
+                        {
+                            bool sel = (sw.Tag as string) == chosenLabelColorHex || (sw.Tag == null && chosenLabelColorHex == null);
+                            sw.BorderThickness = new Thickness(sel ? 2.5 : 0);
+                            sw.BorderBrush = System.Windows.Media.Brushes.White;
+                            sw.Opacity = sel ? 1.0 : 0.75;
+                        }
+                    }
+                    void RefreshValue()
+                    {
+                        foreach (var sw in valueSwatches)
+                        {
+                            bool sel = (sw.Tag as string) == chosenValueColorHex || (sw.Tag == null && chosenValueColorHex == null);
+                            sw.BorderThickness = new Thickness(sel ? 2.5 : 0);
+                            sw.BorderBrush = System.Windows.Media.Brushes.White;
+                            sw.Opacity = sel ? 1.0 : 0.75;
+                        }
+                    }
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 색상:", Margin = new Thickness(0, 0, 0, 4) });
-                var eColorCombo = BuildChartColorCombo(meta.ChartLabelColor);
-                stack.Children.Add(eColorCombo);
+                    var labelColorPanel = BuildRankColorPicker(labelSwatches, ref chosenLabelColorHex, RefreshLabel);
+                    foreach (Border sw in labelSwatches)
+                    {
+                        sw.MouseLeftButtonUp += (s, _) => { chosenLabelColorHex = ((Border)s).Tag as string; RefreshLabel(); };
+                    }
+                    var valueColorPanel = BuildRankColorPicker(valueSwatches, ref chosenValueColorHex, RefreshValue);
+                    foreach (Border sw in valueSwatches)
+                    {
+                        sw.MouseLeftButtonUp += (s, _) => { chosenValueColorHex = ((Border)s).Tag as string; RefreshValue(); };
+                    }
 
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨 크기:", Margin = new Thickness(0, 0, 0, 4) });
-                var eSizeCombo = BuildChartSizeCombo(meta.ChartLabelSize);
-                stack.Children.Add(eSizeCombo);
+                    // 2열 그리드 카드
+                    var twoColGrid = new Grid { Margin = new Thickness(0) };
+                    twoColGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    twoColGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+                    twoColGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-                var btnPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
-                var applyBtn = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 6, 12, 6) };
-                var cancelBtn = new System.Windows.Controls.Button { Content = "취소", Padding = new Thickness(12, 6, 12, 6) };
+                    // 왼쪽: 기준 열
+                    var leftCol = new System.Windows.Controls.StackPanel();
+                    var leftHdr = new System.Windows.Controls.TextBlock
+                    {
+                        Text = "집계 기준", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 8), Opacity = 0.6
+                    };
+                    leftHdr.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    leftCol.Children.Add(leftHdr);
+                    leftCol.Children.Add(LRow("글꼴", rankLabelFontCombo, 42));
+                    leftCol.Children.Add(LRow("크기", rankLabelSizeCombo, 42));
+                    var labelColorLbl = new System.Windows.Controls.TextBlock { Text = "색상", FontSize = 12, Opacity = 0.75, Margin = new Thickness(0, 0, 0, 4) };
+                    labelColorLbl.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    leftCol.Children.Add(labelColorLbl);
+                    leftCol.Children.Add(labelColorPanel);
+
+                    // 오른쪽: 컬럼 열
+                    var rightCol = new System.Windows.Controls.StackPanel();
+                    var rightHdr = new System.Windows.Controls.TextBlock
+                    {
+                        Text = "집계 컬럼", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 8), Opacity = 0.6
+                    };
+                    rightHdr.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    rightCol.Children.Add(rightHdr);
+                    rightCol.Children.Add(LRow("글꼴", rankValueFontCombo, 42));
+                    rightCol.Children.Add(LRow("크기", rankValueSizeCombo, 42));
+                    var valueColorLbl = new System.Windows.Controls.TextBlock { Text = "색상", FontSize = 12, Opacity = 0.75, Margin = new Thickness(0, 0, 0, 4) };
+                    valueColorLbl.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    rightCol.Children.Add(valueColorLbl);
+                    rightCol.Children.Add(valueColorPanel);
+
+                    Grid.SetColumn(leftCol, 0);
+                    Grid.SetColumn(rightCol, 2);
+                    twoColGrid.Children.Add(leftCol);
+                    twoColGrid.Children.Add(rightCol);
+
+                    var rlCardInner = new System.Windows.Controls.StackPanel();
+                    var rlCardHdr = new System.Windows.Controls.TextBlock
+                    {
+                        Text = "글꼴 / 색상", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 10), Opacity = 0.55
+                    };
+                    rlCardHdr.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    rlCardInner.Children.Add(rlCardHdr);
+                    rlCardInner.Children.Add(twoColGrid);
+                    var rlCard = new Border
+                    {
+                        CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 12, 14, 8),
+                        Margin = new Thickness(0, 0, 0, 8), Background = cardBg, Child = rlCardInner
+                    };
+                    mainStack.Children.Add(rlCard);
+                }
+                else
+                {
+                    eFontCombo = MakeFontCombo(meta.ChartFont);
+                    eSizeCombo = MakeSizeCombo(meta.ChartLabelSize);
+                    var colorPicker2 = BuildColorPicker(() => { });
+                    var styleBody2 = new System.Windows.Controls.StackPanel();
+                    styleBody2.Children.Add(LRow("글꼴", eFontCombo));
+                    styleBody2.Children.Add(LRow("크기", eSizeCombo));
+                    styleBody2.Children.Add(LRow("글씨 색상", colorPicker2, 78));
+                    if (meta.ChartType == "HBar")
+                    {
+                        dbShowBarsCheck = new System.Windows.Controls.CheckBox { Content = "막대 표시", IsChecked = meta.ShowBars, Margin = new Thickness(0, 4, 0, 4) };
+                        dbShowBarsCheck.SetResourceReference(System.Windows.Controls.CheckBox.ForegroundProperty, "ForegroundBrush");
+                        styleBody2.Children.Add(dbShowBarsCheck);
+                    }
+                    mainStack.Children.Add(SectionCard("스타일", styleBody2));
+                }
 
                 applyBtn.Click += (s, ev) =>
                 {
@@ -3637,47 +4566,37 @@ namespace WpfApp2
                     meta.DbMiddleCategoryFilter = eMiddleCatBox.SelectedIndex <= 0 ? null : eMiddleCatBox.SelectedItem?.ToString();
                     meta.DbMenuNameFilter = eMenuBox.SelectedIndex <= 0 ? null : eMenuBox.SelectedItem?.ToString();
                     meta.DbSortAscending = eSortCombo.SelectedIndex == 1;
-                    meta.ChartFont = eFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
-                    meta.ChartLabelColor = ChartColorPresets[eColorCombo.SelectedIndex].Hex;
-                    meta.ChartLabelSize = eSizeCombo.SelectedItem?.ToString() is string ev2 && double.TryParse(ev2, out var ed) ? ed : 0;
-
-                    try { LoadDbData(meta); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex.Message}"); }
-
-                    FrameworkElement newChart = null;
+                    if (eFontCombo != null) meta.ChartFont = eFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
+                    if (eSizeCombo != null) meta.ChartLabelSize = eSizeCombo.SelectedItem?.ToString() is string ev2 && double.TryParse(ev2, out var ed) ? ed : 0;
+                    if (eFontCombo != null) meta.ChartLabelColor = chosenColorHex;
+                    if (dbShowBarsCheck != null) meta.ShowBars = dbShowBarsCheck.IsChecked == true;
+                    if (rankLabelFontCombo != null) meta.RankListLabelFont = rankLabelFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
+                    if (rankLabelSizeCombo != null) meta.RankListLabelSize = rankLabelSizeCombo.SelectedItem?.ToString() is string ls && double.TryParse(ls, out var ld) ? ld : 13;
+                    if (rankValueFontCombo != null) meta.RankListValueFont = rankValueFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
+                    if (rankValueSizeCombo != null) meta.RankListValueSize = rankValueSizeCombo.SelectedItem?.ToString() is string vs && double.TryParse(vs, out var vd) ? vd : 13;
+                    if (meta.ChartType == "RankList") { meta.RankListLabelColor = chosenLabelColorHex; meta.RankListValueColor = chosenValueColorHex; }
+                    try { LoadDbData(meta); } catch (Exception ex2) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex2.Message}"); }
+                    FrameworkElement? nc2 = null;
                     switch (meta.ChartType)
                     {
-                        case "Line": newChart = CreateLineChart(meta); break;
-                        case "Bar": newChart = CreateBarChart(meta); break;
-                        case "HBar": newChart = CreateHBarChart(meta); break;
-                        case "Pie": newChart = CreatePieChart(meta); break;
-                        case "Gauge": newChart = CreateGaugeChart(meta); break;
+                        case "Line": nc2 = CreateLineChart(meta); break; case "Bar": nc2 = CreateBarChart(meta); break;
+                        case "HBar": nc2 = CreateHBarChart(meta); break; case "Pie": nc2 = CreatePieChart(meta); break;
+                        case "Gauge": nc2 = CreateGaugeChart(meta); break; case "RankList": nc2 = CreateRankList(meta); break;
                     }
-                    if (newChart != null)
-                    {
-                        if (meta.InnerHeight > 0 &&
-                            newChart is System.Windows.Controls.ScrollViewer svEdit2 &&
-                            svEdit2.Content is CartesianChart ccEdit2)
-                            ApplyInnerChartHeight(ccEdit2, meta);
-                        border.Child = WrapWithDbDates(newChart, meta);
-                    }
-
-                    SaveAllChartStates();
-                    configDlg.Close();
+                    if (nc2 != null) { if (meta.InnerHeight > 0 && nc2 is System.Windows.Controls.ScrollViewer sv4 && sv4.Content is CartesianChart cc4) ApplyInnerChartHeight(cc4, meta); border.Child = WrapWithDbDates(nc2, meta); }
+                    SaveAllChartStates(); configDlg.Close();
                 };
-                cancelBtn.Click += (s, ev) => configDlg.Close();
-                btnPanel.Children.Add(applyBtn);
-                btnPanel.Children.Add(cancelBtn);
-                stack.Children.Add(btnPanel);
             }
             else
             {
-                stack.Children.Add(new System.Windows.Controls.TextBlock { Text = "외부 데이터 소스는 새로고침 버튼을 사용하세요.", Margin = new Thickness(0, 0, 0, 12) });
-                var closeBtn = new System.Windows.Controls.Button { Content = "닫기", HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Padding = new Thickness(12, 6, 12, 6) };
-                closeBtn.Click += (s, ev) => configDlg.Close();
-                stack.Children.Add(closeBtn);
+                var extBody = new System.Windows.Controls.StackPanel();
+                extBody.Children.Add(new System.Windows.Controls.TextBlock { Text = "외부 데이터 소스는 새로고침 버튼을 사용하세요.", Opacity = 0.7 });
+                mainStack.Children.Add(SectionCard("안내", extBody));
+                applyBtn.Content = "닫기";
+                applyBtn.Click += (_, _) => configDlg.Close();
             }
 
-            configDlg.Content = stack;
+            configDlg.Content = outerBorder;
             ApplyDarkTheme(configDlg);
             configDlg.ShowDialog();
         }
@@ -3711,6 +4630,7 @@ namespace WpfApp2
                     case "HBar": newChart = CreateHBarChart(meta); break;
                     case "Pie": newChart = CreatePieChart(meta); break;
                     case "Gauge": newChart = CreateGaugeChart(meta); break;
+                    case "RankList": newChart = CreateRankList(meta); break;
                 }
                 if (newChart != null)
                 {
@@ -4005,11 +4925,12 @@ ORDER BY 값 {sortDir}";
 
                     FrameworkElement newInner = meta.ChartType switch
                     {
-                        "Line"  => CreateLineChart(meta),
-                        "Bar"   => CreateBarChart(meta),
-                        "HBar"  => CreateHBarChart(meta),
-                        "Pie"   => CreatePieChart(meta),
-                        "Gauge" => CreateGaugeChart(meta),
+                        "Line"     => CreateLineChart(meta),
+                        "Bar"      => CreateBarChart(meta),
+                        "HBar"     => CreateHBarChart(meta),
+                        "Pie"      => CreatePieChart(meta),
+                        "Gauge"    => CreateGaugeChart(meta),
+                        "RankList" => CreateRankList(meta),
                         _ => null
                     };
                     if (newInner == null) return;
@@ -4126,6 +5047,8 @@ ORDER BY 값 {sortDir}";
                 Child = popupBorder
             };
 
+            DateTime? prevApplied = initialDate;
+
             cal.SelectedDatesChanged += (sender2, args2) =>
             {
                 if (cal.SelectedDate.HasValue)
@@ -4133,6 +5056,15 @@ ORDER BY 값 {sortDir}";
                     selected = cal.SelectedDate;
                     txt.Text = cal.SelectedDate.Value.ToString("yy-MM-dd");
                     popup.IsOpen = false;
+                    // onChanged()는 popup.Closed에서 날짜가 바뀐 경우에만 호출
+                }
+            };
+
+            popup.Closed += (_, _) =>
+            {
+                if (selected.HasValue && selected != prevApplied)
+                {
+                    prevApplied = selected;
                     onChanged();
                 }
             };
@@ -4335,7 +5267,16 @@ ORDER BY 값 {sortDir}";
                             InnerHeight = meta.InnerHeight,
                             ChartFont = meta.ChartFont,
                             ChartLabelColor = meta.ChartLabelColor,
-                            ChartLabelSize = meta.ChartLabelSize
+                            ChartLabelSize = meta.ChartLabelSize,
+                            ShowBars = meta.ShowBars,
+                            RankListVisibleColumns = meta.RankListVisibleColumns,
+                            RankListLabelFont = meta.RankListLabelFont,
+                            RankListLabelSize = meta.RankListLabelSize,
+                            RankListLabelColor = meta.RankListLabelColor,
+                            RankListValueFont = meta.RankListValueFont,
+                            RankListValueSize = meta.RankListValueSize,
+                            RankListValueColor = meta.RankListValueColor,
+                            RankListColumnWidths = meta.RankListColumnWidths
                         };
                         allCharts.Add(chartData);
                     }
@@ -4385,7 +5326,14 @@ ORDER BY 값 {sortDir}";
                         InnerHeight = chartData.ContainsKey("InnerHeight") ? Convert.ToDouble(chartData["InnerHeight"]) : 0,
                         ChartFont = chartData.ContainsKey("ChartFont") && chartData["ChartFont"] != null ? chartData["ChartFont"].ToString() : "Malgun Gothic",
                         ChartLabelColor = chartData.ContainsKey("ChartLabelColor") ? chartData["ChartLabelColor"]?.ToString() : null,
-                        ChartLabelSize = chartData.ContainsKey("ChartLabelSize") ? Convert.ToDouble(chartData["ChartLabelSize"]) : 0
+                        ChartLabelSize = chartData.ContainsKey("ChartLabelSize") ? Convert.ToDouble(chartData["ChartLabelSize"]) : 0,
+                        ShowBars = !chartData.ContainsKey("ShowBars") || Convert.ToBoolean(chartData["ShowBars"]),
+                        RankListLabelFont = chartData.ContainsKey("RankListLabelFont") && chartData["RankListLabelFont"] != null ? chartData["RankListLabelFont"].ToString() : "Malgun Gothic",
+                        RankListLabelSize = chartData.ContainsKey("RankListLabelSize") ? Convert.ToDouble(chartData["RankListLabelSize"]) : 13,
+                        RankListLabelColor = chartData.ContainsKey("RankListLabelColor") ? chartData["RankListLabelColor"]?.ToString() : null,
+                        RankListValueFont = chartData.ContainsKey("RankListValueFont") && chartData["RankListValueFont"] != null ? chartData["RankListValueFont"].ToString() : "Malgun Gothic",
+                        RankListValueSize = chartData.ContainsKey("RankListValueSize") ? Convert.ToDouble(chartData["RankListValueSize"]) : 13,
+                        RankListValueColor = chartData.ContainsKey("RankListValueColor") ? chartData["RankListValueColor"]?.ToString() : null
                     };
 
                     // StaticData 복원
@@ -4401,6 +5349,12 @@ ORDER BY 값 {sortDir}";
                         var labelsJson = chartData["Labels"].ToString();
                         meta.Labels = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(labelsJson) ?? new List<string>();
                     }
+
+                    // RankList 컬럼 설정 복원
+                    if (chartData.ContainsKey("RankListVisibleColumns") && chartData["RankListVisibleColumns"] != null)
+                        meta.RankListVisibleColumns = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(chartData["RankListVisibleColumns"].ToString()) ?? meta.RankListVisibleColumns;
+                    if (chartData.ContainsKey("RankListColumnWidths") && chartData["RankListColumnWidths"] != null)
+                        meta.RankListColumnWidths = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, double>>(chartData["RankListColumnWidths"].ToString()) ?? meta.RankListColumnWidths;
 
                     // Border 생성 (SetResourceReference로 테마 동적 적용)
                     var border = new System.Windows.Controls.Border
@@ -4438,6 +5392,9 @@ ORDER BY 값 {sortDir}";
                             break;
                         case "Gauge":
                             chartControl = CreateGaugeChart(meta);
+                            break;
+                        case "RankList":
+                            chartControl = CreateRankList(meta);
                             break;
                     }
 
@@ -5354,6 +6311,7 @@ ORDER BY 값 {sortDir}";
             contextMenu.Items.Add(chartMenuItem);
             border.ContextMenu = contextMenu;
             border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
+            ApplySubtleScrollBarStyle(border);
 
             // Canvas 추가
             var canvas = new Canvas { Name = $"ButtonCanvas{_nextTabNumber}", Width = 3000, Height = 2000 };
@@ -5371,11 +6329,11 @@ ORDER BY 값 {sortDir}";
 
             _nextTabNumber++;
 
-            // Window1이 열려있으면 Window1 중앙에, 없으면 MainWindow 중앙에 메시지 표시
+            // Window1이 열려있으면 SettingWindow 중앙에, 없으면 MainWindow 중앙에 메시지 표시
             Window? ownerWindow = null;
             foreach (Window win in System.Windows.Application.Current.Windows)
             {
-                if (win is Window1 w1 && w1.IsVisible)
+                if (win is SettingWindow w1 && w1.IsVisible)
                 {
                     ownerWindow = w1;
                     break;
@@ -5511,6 +6469,7 @@ ORDER BY 값 {sortDir}";
                     contextMenu.Items.Add(chartMenuItem);
                     border.ContextMenu = contextMenu;
                     border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
+                    ApplySubtleScrollBarStyle(border);
 
                     // Canvas 추가 - state.TabIndex에 맞는 Canvas 이름 사용
                     var canvas = new Canvas { Name = $"ButtonCanvas{state.TabIndex + 1}", Width = 3000, Height = 2000 };
@@ -5537,6 +6496,12 @@ ORDER BY 값 {sortDir}";
             {
                 Debug.WriteLine("RestoreAllTabs error: " + ex);
             }
+        }
+
+        private static void ApplySubtleScrollBarStyle(Border border)
+        {
+            if (System.Windows.Application.Current.Resources["SlimScrollBarStyle"] is Style slim)
+                border.Resources[typeof(ScrollBar)] = slim;
         }
     }
 }

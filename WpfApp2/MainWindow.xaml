@@ -64,28 +64,34 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="80"/>
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="setbtn"
-                            Content="Setting"
-                            Width="69" Height="24"
-                            HorizontalAlignment="Right"
-                            Margin="0,5,8,3"
-                            Background="{DynamicResource StatusBarBackgroundBrush}"
-                            FontWeight="Bold"
-                            Foreground="White"
-                            Click="setbtn_Click" BorderBrush="{DynamicResource StatusBarBackgroundBrush}" FontSize="12">
-                        <Button.Template>
-                            <ControlTemplate TargetType="{x:Type Button}">
-                                <Border Background="{TemplateBinding Background}"
-                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                        CornerRadius="7">
-                                    <ContentPresenter HorizontalAlignment="Center"
-                                                      VerticalAlignment="Center"
-                                                      RecognizesAccessKey="True"/>
-                                </Border>
-                            </ControlTemplate>
-                        </Button.Template>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0">
+                        <TextBlock x:Name="ServerStatusText"
+                                   VerticalAlignment="Center"
+                                   FontSize="11" Margin="0,0,10,0"
+                                   Cursor="Hand"
+                                   ToolTipService.InitialShowDelay="200"/>
+                        <Button x:Name="setbtn"
+                                Content="Setting"
+                                Width="69" Height="24"
+                                Margin="0,3,4,0"
+                                Background="{DynamicResource StatusBarBackgroundBrush}"
+                                FontWeight="Bold"
+                                Foreground="White"
+                                Click="setbtn_Click" BorderBrush="{DynamicResource StatusBarBackgroundBrush}" FontSize="12">
+                            <Button.Template>
+                                <ControlTemplate TargetType="{x:Type Button}">
+                                    <Border Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            CornerRadius="7">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          RecognizesAccessKey="True"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </StackPanel>
                     <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center" Width="80" Margin="-3,0,0,0">
                         <Button Content="─" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" Height="32" Width="40"/>
                         <Button Content="✕" Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" Height="32" Width="40" Padding="1,1,1,1" HorizontalContentAlignment="Center"/>
@@ -191,6 +197,7 @@
                                             </Trigger>
                                         </Style.Triggers>
                                     </Style>
+                                    <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource SlimScrollBarStyle}"/>
                                 </Border.Resources>
                                 <Border.ContextMenu>
                                     <ContextMenu>
@@ -204,70 +211,58 @@
                             </Border>
                         </TabItem>
                     </TabControl>
-                    <StackPanel x:Name="MasterButtonPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Orientation="Horizontal" Margin="2,0,0,5">
-                    <Button x:Name="personalbtn" Content="OwnerOnly" Height="40" Width="124" Padding="6,-1,6,2"
-                            Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource WindowBackgroundBrush}" Foreground="{DynamicResource ForegroundBrush}" FontWeight="Bold"
-                            Click="personalbtn_Click">
-                        <Button.Style>
-                            <Style TargetType="{x:Type Button}">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="{x:Type Button}">
-                                            <Border x:Name="border"
-                                                    Background="{TemplateBinding Background}"
-                                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                                    CornerRadius="12">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center"
-                                                                  RecognizesAccessKey="True"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="{DynamicResource StatusBarBorderBrush}"/>
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                                <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="border" Property="Opacity" Value="0.6"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button x:Name="adminbtn" Content="관리자 패널" Height="40" Width="100" Padding="6,-1,6,2" Margin="4,0,0,0"
-                            Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource WindowBackgroundBrush}"
-                            Foreground="{DynamicResource ForegroundBrush}" FontWeight="Bold"
-                            Click="adminbtn_Click" Visibility="Collapsed">
-                        <Button.Style>
-                            <Style TargetType="{x:Type Button}">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="{x:Type Button}">
-                                            <Border x:Name="border"
-                                                    Background="{TemplateBinding Background}"
-                                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                                    CornerRadius="12">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center"
-                                                                  RecognizesAccessKey="True"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="{DynamicResource StatusBarBorderBrush}"/>
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    </StackPanel>
+                    <Grid x:Name="MasterButtonPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="120" Margin="4,0,4,5">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="personalbtn" Grid.Column="0" Height="40" Margin="0,0,4,0"
+                                Foreground="White" FontWeight="Bold"
+                                Click="personalbtn_Click">
+                            <Button.Template>
+                                <ControlTemplate TargetType="{x:Type Button}">
+                                    <Border x:Name="border"
+                                            Background="{DynamicResource StatusBarBackgroundBrush}"
+                                            BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                                            BorderThickness="1" CornerRadius="12">
+                                        <TextBlock Text="모바일" FontSize="12" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Opacity" Value="0.85"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="border" Property="Opacity" Value="0.65"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="adminbtn" Grid.Column="1" Height="40" Width="44"
+                                Foreground="White" FontWeight="Bold"
+                                Click="adminbtn_Click" Visibility="Collapsed">
+                            <Button.Template>
+                                <ControlTemplate TargetType="{x:Type Button}">
+                                    <Border x:Name="border"
+                                            Background="{DynamicResource StatusBarBackgroundBrush}"
+                                            BorderBrush="{DynamicResource StatusBarBorderBrush}"
+                                            BorderThickness="1" CornerRadius="12">
+                                        <TextBlock Text="🛡" FontSize="15"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Opacity" Value="0.85"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="border" Property="Opacity" Value="0.65"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
                 </Grid>
             </DockPanel>
         </DockPanel>

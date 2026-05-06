@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -18,14 +18,16 @@ using AutoUpdaterDotNET;
 namespace WpfApp2
 {
     /// <summary>
-    /// Window1.xaml에 대한 상호 작용 논리
+    /// SettingWindow.xaml에 대한 상호 작용 논리
     /// </summary>
-    public partial class Window1 : Window
+    public partial class SettingWindow : Window
     {
-        public Window1()
+        private bool _isCapturing = false;
+
+        public SettingWindow()
         {
             InitializeComponent();
-            SourceInitialized += Window1_SourceInitialized;
+            SourceInitialized += SettingWindow_SourceInitialized;
 
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             if (version != null)
@@ -35,7 +37,153 @@ namespace WpfApp2
 
             // 마스터 계정만 DB 설정 버튼 표시
             dbConfigBtn.Visibility = Session.IsMaster ? Visibility.Visible : Visibility.Collapsed;
+
+            // Owner는 Show() 이후 설정되므로 Loaded에서 초기화
+            Loaded += (_, __) =>
+            {
+                if (Owner is MainWindow main)
+                {
+                    UpdateHotkeyDisplay(main.HotkeyVk, main.HotkeyAlt, main.HotkeyCtrl, main.HotkeyShift);
+                    ShowInTaskbarCheck.IsChecked = main.TaskbarIconVisible;
+                    ShowTrayIconCheck.IsChecked = main.TrayIconVisible;
+                    UpdateIconCardVisuals();
+                }
+            };
         }
+
+        private void IconRow_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Border b) ApplyCardPressVisual(b);
+        }
+
+        private void IconRow_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (sender == TaskbarCard) ApplyCardState(TaskbarCard, ShowInTaskbarCheck.IsChecked == true);
+            else if (sender == TrayCard) ApplyCardState(TrayCard, ShowTrayIconCheck.IsChecked == true);
+        }
+
+        private void TaskbarRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            ShowInTaskbarCheck.IsChecked = !(ShowInTaskbarCheck.IsChecked == true);
+            ApplyCardState(TaskbarCard, ShowInTaskbarCheck.IsChecked == true);
+            ApplyIconSetting(ShowInTaskbarCheck.IsChecked == true, isTray: false);
+        }
+
+        private void TrayRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            ShowTrayIconCheck.IsChecked = !(ShowTrayIconCheck.IsChecked == true);
+            ApplyCardState(TrayCard, ShowTrayIconCheck.IsChecked == true);
+            ApplyIconSetting(ShowTrayIconCheck.IsChecked == true, isTray: true);
+        }
+
+        private void UpdateIconCardVisuals()
+        {
+            ApplyCardState(TaskbarCard, ShowInTaskbarCheck.IsChecked == true);
+            ApplyCardState(TrayCard,    ShowTrayIconCheck.IsChecked == true);
+        }
+
+        private static System.Windows.Media.LinearGradientBrush PressedBorderBrush() =>
+            new System.Windows.Media.LinearGradientBrush(
+                new System.Windows.Media.GradientStopCollection
+                {
+                    new System.Windows.Media.GradientStop(
+                        System.Windows.Media.Color.FromRgb(0x58, 0x58, 0x58), 0),   // 왼쪽 위: 밝음
+                    new System.Windows.Media.GradientStop(
+                        System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1C), 1)   // 오른쪽 아래: 어두움
+                },
+                new System.Windows.Point(0, 0),
+                new System.Windows.Point(1, 1));
+
+        private void ApplyCardPressVisual(Border card)
+        {
+            card.Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x14, 0x14, 0x14));
+            card.BorderBrush = PressedBorderBrush();
+            card.Effect = null;
+            card.RenderTransform = new System.Windows.Media.TranslateTransform(1, 2);
+        }
+
+        private void ApplyCardState(Border card, bool active)
+        {
+            if (active)
+            {
+                // ON: 어두운 배경 + 그라디언트 테두리(왼쪽위 밝음) + 오른쪽 아래 이동
+                card.Background = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x14, 0x14, 0x14));
+                card.BorderBrush = PressedBorderBrush();
+                card.Effect = null;
+                card.RenderTransform = new System.Windows.Media.TranslateTransform(1, 2);
+            }
+            else
+            {
+                // OFF: 기본 배경 + 하단 그림자(올라온 입체감)
+                card.SetResourceReference(Border.BackgroundProperty, "ContextMenuBorderBrush");
+                card.BorderBrush = System.Windows.Media.Brushes.Transparent;
+                card.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = System.Windows.Media.Colors.Black,
+                    BlurRadius = 8, ShadowDepth = 3, Opacity = 0.4, Direction = 270
+                };
+                card.RenderTransform = System.Windows.Media.Transform.Identity;
+            }
+        }
+
+        private void ApplyIconSetting(bool visible, bool isTray)
+        {
+            MainWindow? main = null;
+            foreach (Window w in System.Windows.Application.Current.Windows)
+            {
+                if (w is MainWindow m) { main = m; break; }
+            }
+            if (main == null) return;
+
+            if (isTray)
+                main.SetTrayIconVisible(visible);
+            else
+                main.SetTaskbarIconVisible(visible);
+        }
+
+        private void CaptureBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isCapturing)
+            {
+                _isCapturing = false;
+                CaptureBtn.Content = "키 캡처";
+                HotkeyStatusText.Text = "";
+                if (Owner is MainWindow m)
+                    UpdateHotkeyDisplay(m.HotkeyVk, m.HotkeyAlt, m.HotkeyCtrl, m.HotkeyShift);
+            }
+            else
+            {
+                _isCapturing = true;
+                CaptureBtn.Content = "취소";
+                HotkeyDisplayText.Text = "";
+                HotkeyStatusText.Text = "키를 눌러주세요... (Esc로 취소)";
+            }
+        }
+
+        private void UpdateHotkeyDisplay(int vk, bool alt, bool ctrl, bool shift)
+        {
+            var parts = new List<string>();
+            if (ctrl)  parts.Add("Ctrl");
+            if (alt)   parts.Add("Alt");
+            if (shift) parts.Add("Shift");
+            parts.Add(VkToString(vk));
+            HotkeyDisplayText.Text = string.Join(" + ", parts);
+        }
+
+        private static string VkToString(int vk) => vk switch
+        {
+            0xC0 => "`",  0xBD => "-",  0xBB => "=",
+            0xDB => "[",  0xDD => "]",  0xDC => "\\",
+            0xBA => ";",  0xDE => "'",  0xBC => ",",
+            0xBE => ".",  0xBF => "/",
+            0x20 => "Space", 0x09 => "Tab",
+            _ => vk >= 0x41 && vk <= 0x5A ? ((char)vk).ToString()
+               : vk >= 0x30 && vk <= 0x39 ? ((char)vk).ToString()
+               : vk >= 0x70 && vk <= 0x7B ? $"F{vk - 0x6F}"
+               : $"VK({vk:X2})"
+        };
 
         private void dbConfigBtn_Click(object sender, RoutedEventArgs e)
         {
@@ -259,7 +407,7 @@ namespace WpfApp2
             }
         }
 
-        private void Window1_SourceInitialized(object sender, EventArgs e)
+        private void SettingWindow_SourceInitialized(object sender, EventArgs e)
         {
             // Owner가 설정되어 있으면 Owner 중앙에 배치
             // SourceInitialized는 창이 생성되었지만 아직 표시되기 전에 발생
@@ -313,8 +461,46 @@ namespace WpfApp2
             Close();
         }
 
-        private void Window1_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        private void SettingWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
+            if (_isCapturing)
+            {
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+                if (key == Key.Escape)
+                {
+                    _isCapturing = false;
+                    CaptureBtn.Content = "키 캡처";
+                    HotkeyStatusText.Text = "";
+                    if (Owner is MainWindow m)
+                        UpdateHotkeyDisplay(m.HotkeyVk, m.HotkeyAlt, m.HotkeyCtrl, m.HotkeyShift);
+                    e.Handled = true;
+                    return;
+                }
+
+                // 수식키 단독은 무시
+                if (key == Key.LeftAlt || key == Key.RightAlt ||
+                    key == Key.LeftCtrl || key == Key.RightCtrl ||
+                    key == Key.LeftShift || key == Key.RightShift ||
+                    key == Key.LWin || key == Key.RWin)
+                    return;
+
+                bool alt   = (Keyboard.Modifiers & ModifierKeys.Alt)     != 0;
+                bool ctrl  = (Keyboard.Modifiers & ModifierKeys.Control)  != 0;
+                bool shift = (Keyboard.Modifiers & ModifierKeys.Shift)    != 0;
+                int vk = KeyInterop.VirtualKeyFromKey(key);
+
+                if (Owner is MainWindow main)
+                    main.ApplyHotkeySettings(vk, alt, ctrl, shift);
+
+                UpdateHotkeyDisplay(vk, alt, ctrl, shift);
+                _isCapturing = false;
+                CaptureBtn.Content = "키 캡처";
+                HotkeyStatusText.Text = "저장되었습니다.";
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape)
             {
                 Close();
@@ -509,3 +695,4 @@ namespace WpfApp2
         }
     }
 }
+

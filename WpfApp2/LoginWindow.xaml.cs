@@ -1,16 +1,20 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
+using WpfColor = System.Windows.Media.Color;
 
 namespace WpfApp2
 {
     public partial class LoginWindow : Window
     {
         private bool _showingPassword = false;
+        private CancellationTokenSource? _pollCts;
 
         public LoginWindow()
         {
             InitializeComponent();
             Loaded += LoginWindow_Loaded;
+            Closed += (_, _) => _pollCts?.Cancel();
             PreviewKeyUp += (_, _) => UpdateCapsLock();
             PreviewKeyDown += (_, _) => UpdateCapsLock();
         }
@@ -24,6 +28,9 @@ namespace WpfApp2
 
         private async void LoginWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            _pollCts = new CancellationTokenSource();
+            _ = PollDbStatusAsync(_pollCts.Token);
+
             var saved = AutoLoginService.Load();
             if (saved != null)
             {
@@ -31,13 +38,47 @@ namespace WpfApp2
                 PasswordBox.Password = saved.Value.Password;
                 AutoLoginCheck.IsChecked = true;
 
-                // 자동 로그인 시도
                 if (DatabaseService.IsConfigured)
                     await AttemptLoginAsync(saved.Value.Username, saved.Value.Password);
             }
             else
             {
                 UsernameBox.Focus();
+            }
+        }
+
+        private async Task PollDbStatusAsync(CancellationToken ct)
+        {
+            SetDbStatus(null); // "확인 중..." 즉시 표시
+
+            while (!ct.IsCancellationRequested)
+            {
+                bool connected = DatabaseService.IsConfigured &&
+                                 await DatabaseService.TestConnectionAsync(DatabaseService.ConnectionString);
+                if (ct.IsCancellationRequested) break;
+                SetDbStatus(connected);
+
+                try { await Task.Delay(2500, ct); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        private void SetDbStatus(bool? connected)
+        {
+            switch (connected)
+            {
+                case true:
+                    DbStatusText.Text = "서버연결됨";
+                    DbStatusText.Foreground = new SolidColorBrush(WpfColor.FromRgb(0x4C, 0xAF, 0x50));
+                    break;
+                case false:
+                    DbStatusText.Text = "서버연결필요";
+                    DbStatusText.Foreground = new SolidColorBrush(WpfColor.FromRgb(0xFF, 0x5A, 0x5A));
+                    break;
+                default:
+                    DbStatusText.Text = "서버확인 중...";
+                    DbStatusText.Foreground = new SolidColorBrush(WpfColor.FromRgb(0xAA, 0xAA, 0xAA));
+                    break;
             }
         }
 

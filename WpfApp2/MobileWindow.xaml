@@ -1,9 +1,9 @@
-﻿<Window x:Class="WpfApp2.Window2"
+<Window x:Class="WpfApp2.MobileWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="Window2" Height="600" Width="432"
+        Title="모바일모드" Height="600" Width="432"
         Background="#00000000" Foreground="#FFDCDCDC" WindowStyle="None" ResizeMode="CanResize"
         SnapsToDevicePixels="True" UseLayoutRounding="True" AllowsTransparency="True">
     <Window.Resources>
@@ -119,7 +119,7 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Window2" VerticalAlignment="Center" Margin="8,0,0,0" FontWeight="Bold" Foreground="#FFCCCCCC" FontSize="12"/>
+                    <TextBlock Text="모바일모드" VerticalAlignment="Center" Margin="8,0,0,0" FontWeight="Bold" Foreground="#FFCCCCCC" FontSize="12"/>
                     <StackPanel Orientation="Horizontal" Grid.Column="4" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <Button x:Name="PhoneToggleButton" Content="📱" Width="32" Height="22" Style="{StaticResource TitleBarButtonStyle}" Click="PhoneToggle_Click" ToolTip="휴대폰 화면 토글"/>
                         <Button Content="─" Width="32" Height="22" Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click"/>
@@ -149,3 +149,4 @@
         </Grid>
     </Border>
 </Window>
+
