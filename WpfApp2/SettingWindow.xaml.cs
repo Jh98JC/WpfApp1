@@ -96,9 +96,8 @@ namespace WpfApp2
 
         private void ApplyCardPressVisual(Border card)
         {
-            card.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x14, 0x14, 0x14));
-            card.BorderBrush = PressedBorderBrush();
+            card.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
+            card.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
             card.Effect = null;
             card.RenderTransform = new System.Windows.Media.TranslateTransform(1, 2);
         }
@@ -107,16 +106,15 @@ namespace WpfApp2
         {
             if (active)
             {
-                // ON: 어두운 배경 + 그라디언트 테두리(왼쪽위 밝음) + 오른쪽 아래 이동
-                card.Background = new System.Windows.Media.SolidColorBrush(
-                    System.Windows.Media.Color.FromRgb(0x14, 0x14, 0x14));
-                card.BorderBrush = PressedBorderBrush();
+                // ON: 창 배경색(테마 기준) + 액센트 테두리 + 눌린 위치
+                card.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
+                card.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
                 card.Effect = null;
                 card.RenderTransform = new System.Windows.Media.TranslateTransform(1, 2);
             }
             else
             {
-                // OFF: 기본 배경 + 하단 그림자(올라온 입체감)
+                // OFF: 기본 카드 배경 + 하단 그림자
                 card.SetResourceReference(Border.BackgroundProperty, "ContextMenuBorderBrush");
                 card.BorderBrush = System.Windows.Media.Brushes.Transparent;
                 card.Effect = new System.Windows.Media.Effects.DropShadowEffect

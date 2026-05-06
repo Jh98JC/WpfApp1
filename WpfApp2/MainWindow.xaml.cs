@@ -2309,6 +2309,8 @@ namespace WpfApp2
             public double RankListValueSize { get; set; } = 13;
             public string? RankListValueColor { get; set; } = null;
             public Dictionary<string, double> RankListColumnWidths { get; set; } = new Dictionary<string, double>();
+            public List<string> RankListColumnOrder { get; set; } = new List<string>();
+            public Dictionary<string, string> RankListColumnAlignments { get; set; } = new Dictionary<string, string>();
         }
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
@@ -3534,7 +3536,7 @@ ORDER BY 날짜 DESC";
                 ResizeMode = System.Windows.ResizeMode.CanResizeWithGrip
             };
 
-            var outerBorder2 = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10) };
+            var outerBorder2 = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), ClipToBounds = true };
             outerBorder2.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
             outerBorder2.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
             var root = new System.Windows.Controls.DockPanel();
@@ -3597,7 +3599,7 @@ ORDER BY 날짜 DESC";
                 CanUserSortColumns = true,
                 BorderThickness = new Thickness(0),
                 Margin = new Thickness(8, 0, 8, 8),
-                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
             };
             grid.SetResourceReference(System.Windows.Controls.DataGrid.BackgroundProperty, "WindowBackgroundBrush");
             grid.SetResourceReference(System.Windows.Controls.DataGrid.ForegroundProperty, "ForegroundBrush");
@@ -3612,6 +3614,8 @@ ORDER BY 날짜 DESC";
             cellStyle.Setters.Add(new Setter(System.Windows.Controls.TextBlock.ForegroundProperty, fg2));
             grid.CellStyle = cellStyle;
 
+            bool gridLoaded = false;
+
             // 열 헤더 스타일 (테마)
             var headerStyle = new Style(typeof(System.Windows.Controls.Primitives.DataGridColumnHeader));
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BackgroundProperty, barBg));
@@ -3620,9 +3624,52 @@ ORDER BY 날짜 DESC";
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.FontWeightProperty, FontWeights.SemiBold));
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.BorderBrushProperty, barBg));
             headerStyle.Setters.Add(new Setter(System.Windows.Controls.Control.HorizontalContentAlignmentProperty, System.Windows.HorizontalAlignment.Center));
+            headerStyle.Setters.Add(new EventSetter(
+                UIElement.MouseRightButtonDownEvent,
+                new System.Windows.Input.MouseButtonEventHandler((s, e) =>
+                {
+                    if (s is not System.Windows.Controls.Primitives.DataGridColumnHeader colHeader) return;
+                    if (colHeader.Column?.Header is not string colName) return;
+                    var ctxMenu = new System.Windows.Controls.ContextMenu();
+                    foreach (var (label, alignKey) in new (string, string)[] {
+                        ("왼쪽 정렬",   "Left"),
+                        ("가운데 정렬", "Center"),
+                        ("오른쪽 정렬", "Right")
+                    })
+                    {
+                        var key = alignKey;
+                        var cn  = colName;
+                        var mi  = new System.Windows.Controls.MenuItem { Header = label };
+                        mi.Click += (_, _) =>
+                        {
+                            meta.RankListColumnAlignments[cn] = key;
+                            grid.Dispatcher.InvokeAsync(() => { RebuildColumns(); SaveAllChartStates(); });
+                        };
+                        ctxMenu.Items.Add(mi);
+                    }
+                    ctxMenu.PlacementTarget = colHeader;
+                    ctxMenu.IsOpen = true;
+                    e.Handled = true;
+                })
+            ));
             grid.ColumnHeaderStyle = headerStyle;
 
             var colHeaderCbMap = new Dictionary<string, System.Windows.Controls.CheckBox>();
+
+            void DistributeEqualWidths()
+            {
+                // 저장된 너비가 없을 때만 창 너비에 맞게 균등 분배
+                bool hasSaved = grid.Columns.Any(c => c.Header is string h && meta.RankListColumnWidths.TryGetValue(h, out var ww) && ww > 0);
+                if (hasSaved) return;
+                double avail = grid.ActualWidth - 2;
+                int cnt = grid.Columns.Count;
+                if (cnt > 0 && avail > cnt * 40)
+                {
+                    double cw = Math.Floor(avail / cnt);
+                    foreach (var c in grid.Columns)
+                        c.Width = new System.Windows.Controls.DataGridLength(cw);
+                }
+            }
 
             void SaveColumnWidths()
             {
@@ -3631,30 +3678,54 @@ ORDER BY 날짜 DESC";
                     if (dgCol.Header is string h && dgCol.ActualWidth > 0)
                         meta.RankListColumnWidths[h] = dgCol.ActualWidth;
                 }
+                meta.RankListColumnOrder = grid.Columns
+                    .OrderBy(c => c.DisplayIndex)
+                    .Where(c => c.Header is string)
+                    .Select(c => (string)c.Header!)
+                    .ToList();
                 SaveAllChartStates();
             }
 
             void RebuildColumns()
             {
                 grid.Columns.Clear();
-                foreach (var col in AllRawColumns)
-                {
-                    if (!meta.RankListVisibleColumns.Contains(col)) continue;
-                    if (!rows.Columns.Contains(col)) continue;
 
+                var orderedCols = meta.RankListColumnOrder.Count > 0
+                    ? meta.RankListColumnOrder
+                        .Where(c => meta.RankListVisibleColumns.Contains(c) && rows.Columns.Contains(c))
+                        .ToList()
+                    : AllRawColumns
+                        .Where(c => meta.RankListVisibleColumns.Contains(c) && rows.Columns.Contains(c))
+                        .ToList();
+                foreach (var c2 in AllRawColumns)
+                    if (!orderedCols.Contains(c2) && meta.RankListVisibleColumns.Contains(c2) && rows.Columns.Contains(c2))
+                        orderedCols.Add(c2);
+
+                bool hasSavedWidths = orderedCols.Any(c => meta.RankListColumnWidths.TryGetValue(c, out var ww) && ww > 0);
+
+                foreach (var col in orderedCols)
+                {
                     double savedW = meta.RankListColumnWidths.TryGetValue(col, out var w) ? w : 0;
-                    System.Windows.Controls.DataGridLength colWidth = savedW > 0
+                    var colWidth = savedW > 0
                         ? new System.Windows.Controls.DataGridLength(savedW)
-                        : col == "날짜"
-                            ? new System.Windows.Controls.DataGridLength(100)
-                            : new System.Windows.Controls.DataGridLength(130);
+                        : new System.Windows.Controls.DataGridLength(130);
+
+                    var alignStr = meta.RankListColumnAlignments.TryGetValue(col, out var a) ? a : "Center";
+                    var cellAlign = alignStr == "Left" ? System.Windows.HorizontalAlignment.Left
+                                  : alignStr == "Right" ? System.Windows.HorizontalAlignment.Right
+                                  : System.Windows.HorizontalAlignment.Center;
+
+                    var cellElemStyle = new Style(typeof(System.Windows.Controls.TextBlock));
+                    cellElemStyle.Setters.Add(new Setter(System.Windows.Controls.TextBlock.HorizontalAlignmentProperty, cellAlign));
+                    cellElemStyle.Setters.Add(new Setter(System.Windows.Controls.TextBlock.ForegroundProperty, fg2));
 
                     var dgCol = col == "날짜"
                         ? (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
                           {
                               Header = col,
                               Binding = new System.Windows.Data.Binding($"[{col}]") { StringFormat = "yyyy-MM-dd" },
-                              Width = colWidth
+                              Width = colWidth,
+                              ElementStyle = cellElemStyle
                           }
                         : (System.Windows.Controls.DataGridColumn)new System.Windows.Controls.DataGridTextColumn
                           {
@@ -3663,10 +3734,14 @@ ORDER BY 날짜 DESC";
                               {
                                   StringFormat = (col == "총매출액" || col == "총수량" || col == "판매수량" || col == "서비스수량") ? "N0" : null
                               },
-                              Width = colWidth
+                              Width = colWidth,
+                              ElementStyle = cellElemStyle
                           };
                     grid.Columns.Add(dgCol);
                 }
+
+                if (!hasSavedWidths)
+                    grid.Dispatcher.InvokeAsync(DistributeEqualWidths, System.Windows.Threading.DispatcherPriority.Loaded);
             }
 
             // 열 선택 체크박스 생성
@@ -3680,8 +3755,8 @@ ORDER BY 날짜 DESC";
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 cb.SetResourceReference(System.Windows.Controls.CheckBox.ForegroundProperty, "ForegroundBrush");
-                cb.Checked   += (_, _) => { if (!meta.RankListVisibleColumns.Contains(col)) meta.RankListVisibleColumns.Add(col); RebuildColumns(); SaveAllChartStates(); };
-                cb.Unchecked += (_, _) => { meta.RankListVisibleColumns.Remove(col); RebuildColumns(); SaveAllChartStates(); };
+                cb.Checked   += (_, _) => { if (!meta.RankListVisibleColumns.Contains(col)) meta.RankListVisibleColumns.Add(col); grid.Dispatcher.InvokeAsync(() => { RebuildColumns(); SaveAllChartStates(); }); };
+                cb.Unchecked += (_, _) => { meta.RankListVisibleColumns.Remove(col); grid.Dispatcher.InvokeAsync(() => { RebuildColumns(); SaveAllChartStates(); }); };
                 colPanel.Children.Add(cb);
                 colHeaderCbMap[col] = cb;
             }
@@ -3689,6 +3764,7 @@ ORDER BY 날짜 DESC";
             // DataGrid 데이터 바인딩
             grid.ItemsSource = rows.DefaultView;
             RebuildColumns();
+            grid.Loaded += (_, _) => { gridLoaded = true; DistributeEqualWidths(); };
             root.Children.Add(grid);
 
             win.Content = outerBorder2;
@@ -5276,7 +5352,9 @@ ORDER BY 값 {sortDir}";
                             RankListValueFont = meta.RankListValueFont,
                             RankListValueSize = meta.RankListValueSize,
                             RankListValueColor = meta.RankListValueColor,
-                            RankListColumnWidths = meta.RankListColumnWidths
+                            RankListColumnWidths = meta.RankListColumnWidths,
+                            RankListColumnOrder = meta.RankListColumnOrder,
+                            RankListColumnAlignments = meta.RankListColumnAlignments
                         };
                         allCharts.Add(chartData);
                     }
@@ -5355,6 +5433,10 @@ ORDER BY 값 {sortDir}";
                         meta.RankListVisibleColumns = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(chartData["RankListVisibleColumns"].ToString()) ?? meta.RankListVisibleColumns;
                     if (chartData.ContainsKey("RankListColumnWidths") && chartData["RankListColumnWidths"] != null)
                         meta.RankListColumnWidths = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, double>>(chartData["RankListColumnWidths"].ToString()) ?? meta.RankListColumnWidths;
+                    if (chartData.ContainsKey("RankListColumnOrder") && chartData["RankListColumnOrder"] != null)
+                        meta.RankListColumnOrder = Newtonsoft.Json.JsonConvert.DeserializeObject<List<string>>(chartData["RankListColumnOrder"].ToString()) ?? meta.RankListColumnOrder;
+                    if (chartData.ContainsKey("RankListColumnAlignments") && chartData["RankListColumnAlignments"] != null)
+                        meta.RankListColumnAlignments = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(chartData["RankListColumnAlignments"].ToString()) ?? meta.RankListColumnAlignments;
 
                     // Border 생성 (SetResourceReference로 테마 동적 적용)
                     var border = new System.Windows.Controls.Border

@@ -74,6 +74,9 @@ namespace WpfApp2
             // 파싱 이벤트만 구독 (커스텀 XML 파싱용)
             AutoUpdater.ParseUpdateInfoEvent += AutoUpdater_ParseUpdateInfoEvent;
 
+            // 업데이트 확인 결과 이벤트 — 커스텀 UpdateWindow 표시
+            AutoUpdater.CheckForUpdateEvent += AutoUpdater_CheckForUpdateEvent;
+
             // ApplicationExitEvent 추가 - 업데이트 다운로드 완료 후 앱 종료 전
             AutoUpdater.ApplicationExitEvent += AutoUpdater_ApplicationExitEvent;
 
@@ -189,6 +192,26 @@ namespace WpfApp2
             {
                 System.Diagnostics.Debug.WriteLine($"CheckUpdateCompletedFlag 오류: {ex.Message}");
             }
+        }
+
+        private void AutoUpdater_CheckForUpdateEvent(UpdateInfoEventArgs args)
+        {
+            if (args?.IsUpdateAvailable != true) return;
+
+            Dispatcher.Invoke(() =>
+            {
+                string current  = args.InstalledVersion?.ToString() ?? "알 수 없음";
+                string latest   = args.CurrentVersion  ?? "알 수 없음";
+                string changelog = pendingChangelogUrl  ?? "";
+
+                var win = new UpdateWindow(current, latest, changelog)
+                {
+                    WindowStartupLocation = WindowStartupLocation.CenterScreen
+                };
+
+                if (win.ShowDialog() == true)
+                    AutoUpdater.DownloadUpdate(args);
+            });
         }
 
         private void AutoUpdater_ParseUpdateInfoEvent(ParseUpdateInfoEventArgs args)
