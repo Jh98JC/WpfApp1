@@ -70,11 +70,8 @@ namespace WpfApp2
                 string tempFile = await DownloadFileAsync(_downloadUrl, progress, _cts.Token);
 
                 DownloadProgressBar.Value = 100;
-                FooterProgressText.Text = "다운로드 완료, 설치 중...";
-                await Task.Delay(600);
-
-                FooterProgressText.Text = "잠시 후 앱이 종료됩니다.";
-                await Task.Delay(1000);
+                FooterProgressText.Text = "설치 중...";
+                await Task.Delay(300);
 
                 if (System.Windows.Application.Current is App app)
                     app.StartInstall(tempFile);

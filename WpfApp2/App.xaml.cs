@@ -259,10 +259,8 @@ namespace WpfApp2
                     string ea = appPath.Replace("'", "''");
                     string ps1 =
                         $"$p = {pid}\r\n" +
-                        $"while (Get-Process -Id $p -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\r\n" +
-                        $"Start-Sleep -Milliseconds 500\r\n" +
+                        $"while (Get-Process -Id $p -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}\r\n" +
                         $"Expand-Archive -Path '{ez}' -DestinationPath '{ed}' -Force\r\n" +
-                        $"Start-Sleep -Milliseconds 1000\r\n" +
                         (string.IsNullOrEmpty(appPath) ? "" : $"Start-Process -FilePath '{ea}'\r\n") +
                         $"Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue\r\n";
                     File.WriteAllText(ps1Path, ps1);
