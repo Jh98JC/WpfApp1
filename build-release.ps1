@@ -37,6 +37,7 @@ $xmlContent = @"
   <version>$Version</version>
   <url>https://github.com/Jh98JC/WpfApp1/releases/download/v$Version/WpfApp2-v$Version.zip</url>
   <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v$Version</changelog>
+  <releaseNotes>$ReleaseNotes</releaseNotes>
   <mandatory>true</mandatory>
 </item>
 "@
@@ -66,21 +67,39 @@ Compress-Archive -Path "$publishDir\*" -DestinationPath $zipFile -CompressionLev
 $zipSize = (Get-Item $zipFile).Length / 1MB
 Write-Host "  OK ZIP created: $([math]::Round($zipSize, 2)) MB" -ForegroundColor Green
 
-# 5. Git commit & push (모든 변경사항 커밋)
+# 5. Git commit, tag & push
 Write-Host "[5/6] Committing to Git..." -ForegroundColor Yellow
+
+# 원격 태그 동기화 (다른 컴퓨터에서 만든 태그 포함)
+git fetch --tags --force --quiet 2>&1 | Out-Null
+
 git add -A
 $commitMsg = "Release v$Version"
 git commit -m $commitMsg
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  OK Committed: $commitMsg" -ForegroundColor Green
-    git push origin main
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  OK Pushed to GitHub" -ForegroundColor Green
-    } else {
-        Write-Host "  ! Push failed (continuing anyway...)" -ForegroundColor Yellow
-    }
 } else {
     Write-Host "  ! Nothing to commit (all files unchanged)" -ForegroundColor Yellow
+}
+
+# 태그 생성 (이미 있으면 덮어씀)
+git tag -f "v$Version"
+Write-Host "  OK Tag v$Version created" -ForegroundColor Green
+
+# main 브랜치 push
+git push origin main
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  OK Pushed to GitHub" -ForegroundColor Green
+} else {
+    Write-Host "  ! Push failed (continuing anyway...)" -ForegroundColor Yellow
+}
+
+# 태그 push (force: 같은 버전으로 재릴리즈 시 덮어씀)
+git push origin "v$Version" --force
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  OK Tag v$Version pushed" -ForegroundColor Green
+} else {
+    Write-Host "  ! Tag push failed (continuing anyway...)" -ForegroundColor Yellow
 }
 
 # 6. Create GitHub Release
@@ -94,7 +113,7 @@ try {
     # 릴리즈가 없으면 무시
 }
 
-# 새 릴리즈 생성
+# 새 릴리즈 생성 (태그가 이미 push되어 있으므로 그 태그를 사용)
 gh release create "v$Version" $zipFile --title "v$Version" --notes $ReleaseNotes
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  OK Release created!" -ForegroundColor Green

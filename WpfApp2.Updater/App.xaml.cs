@@ -12,6 +12,7 @@ namespace WpfApp2.Updater
             int waitPid = -1;
             string silentArgs = "/S";
             string version = "";
+            string appPath = "";
 
             var args = e.Args;
             for (int i = 0; i < args.Length; i++)
@@ -26,6 +27,8 @@ namespace WpfApp2.Updater
                         silentArgs = args[++i]; break;
                     case "--version" when i + 1 < args.Length:
                         version = args[++i]; break;
+                    case "--apppath" when i + 1 < args.Length:
+                        appPath = args[++i]; break;
                 }
             }
 
@@ -35,7 +38,7 @@ namespace WpfApp2.Updater
                 return;
             }
 
-            var window = new UpdaterWindow(installerPath, waitPid, silentArgs, version);
+            var window = new UpdaterWindow(installerPath, waitPid, silentArgs, version, appPath);
             MainWindow = window;
             window.Show();
         }

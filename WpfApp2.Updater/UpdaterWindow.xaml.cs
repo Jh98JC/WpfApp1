@@ -10,13 +10,15 @@ namespace WpfApp2.Updater
         private readonly string _installerPath;
         private readonly int _waitPid;
         private readonly string _silentArgs;
+        private readonly string _appPath;
 
-        public UpdaterWindow(string installerPath, int waitPid, string silentArgs, string version)
+        public UpdaterWindow(string installerPath, int waitPid, string silentArgs, string version, string appPath)
         {
             InitializeComponent();
             _installerPath = installerPath;
             _waitPid = waitPid;
             _silentArgs = silentArgs;
+            _appPath = appPath;
             Loaded += async (_, _) => await RunUpdateAsync();
         }
 
@@ -59,11 +61,21 @@ namespace WpfApp2.Updater
                 return;
             }
 
-            // Done
+            // Done — 앱 재시작 후 종료
             ProgressBar.IsIndeterminate = false;
             ProgressBar.Value = 100;
-            StatusText.Text = "설치 완료! 잠시 후 창이 닫힙니다.";
-            await Task.Delay(2000);
+            StatusText.Text = "설치 완료! 앱을 시작합니다...";
+            await Task.Delay(1500);
+
+            if (!string.IsNullOrEmpty(_appPath) && System.IO.File.Exists(_appPath))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(_appPath) { UseShellExecute = true });
+                }
+                catch { }
+            }
+
             Application.Current.Shutdown();
         }
     }

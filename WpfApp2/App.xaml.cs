@@ -20,6 +20,7 @@ namespace WpfApp2
         private MainWindow? mainWindow;
         private string? pendingUpdateVersion;
         private string? pendingChangelogUrl;
+        private string? pendingReleaseNotes;
         private bool _updateInProgress = false;
 
         protected override void OnStartup(StartupEventArgs e)
@@ -208,9 +209,12 @@ namespace WpfApp2
                 splashWindow?.Close();
                 splashWindow = null;
 
-                string current      = args.InstalledVersion?.ToString() ?? "알 수 없음";
+                var    iv           = args.InstalledVersion;
+                string current      = iv == null ? "알 수 없음"
+                                    : iv.Revision <= 0 ? $"{iv.Major}.{iv.Minor}.{iv.Build}"
+                                    : iv.ToString();
                 string latest       = args.CurrentVersion  ?? "알 수 없음";
-                string changelog    = pendingChangelogUrl  ?? "";
+                string changelog    = pendingReleaseNotes  ?? "";
                 string downloadUrl  = args.DownloadURL     ?? "";
 
                 var win = new UpdateWindow(current, latest, changelog, downloadUrl)
@@ -241,14 +245,15 @@ namespace WpfApp2
             {
                 string silentArgs = DetectSilentArgs(tempFilePath);
                 int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                string appPath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
 
                 string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.Updater.exe");
                 if (File.Exists(updaterPath))
                 {
-                    // 별도 프로세스로 업데이터 실행 — 메인 앱 종료 후 인스톨러 실행
+                    // 별도 프로세스로 업데이터 실행 — 메인 앱 종료 후 인스톨러 실행 후 앱 재시작
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(updaterPath)
                     {
-                        Arguments = $"--install \"{tempFilePath}\" --pid {pid} --args \"{silentArgs}\" --version \"{pendingUpdateVersion ?? ""}\"",
+                        Arguments = $"--install \"{tempFilePath}\" --pid {pid} --args \"{silentArgs}\" --version \"{pendingUpdateVersion ?? ""}\" --apppath \"{appPath}\"",
                         UseShellExecute = false
                     });
                 }
@@ -263,6 +268,8 @@ namespace WpfApp2
                         $"tasklist /fi \"pid eq {pid}\" /nh 2>nul | find /i \".exe\" >nul\r\n" +
                         "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto loop)\r\n" +
                         $"start \"\" \"{tempFilePath}\" {silentArgs}\r\n" +
+                        "timeout /t 3 /nobreak >nul\r\n" +
+                        $"start \"\" \"{appPath}\"\r\n" +
                         "del \"%~f0\"\r\n";
                     File.WriteAllText(batchPath, batch);
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
@@ -310,9 +317,11 @@ namespace WpfApp2
 
                 var newVersion = item.Element("version")?.Value;
                 var changelogUrl = item.Element("changelog")?.Value;
+                var releaseNotes = item.Element("releaseNotes")?.Value;
 
-                pendingUpdateVersion = newVersion;  // 새 버전 저장
-                pendingChangelogUrl = changelogUrl;  // 변경로그 URL 저장
+                pendingUpdateVersion = newVersion;
+                pendingChangelogUrl = changelogUrl;
+                pendingReleaseNotes = releaseNotes;
 
                 args.UpdateInfo = new UpdateInfoEventArgs
                 {
