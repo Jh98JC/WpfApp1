@@ -63,7 +63,7 @@ namespace WpfApp2.Updater
                             if (!string.IsNullOrEmpty(destDir))
                                 System.IO.Directory.CreateDirectory(destDir);
                             try { entry.ExtractToFile(destPath, overwrite: true); }
-                            catch (System.IO.IOException) { /* 실행 중인 파일은 건너뜀 */ }
+                            catch { /* 실행 중인 파일은 건너뜀 */ }
                         }
                     });
                 }
@@ -92,11 +92,16 @@ namespace WpfApp2.Updater
             StatusText.Text = "설치 완료! 앱을 시작합니다...";
             await Task.Delay(1500);
 
-            if (!string.IsNullOrEmpty(_appPath) && System.IO.File.Exists(_appPath))
+            // appPath가 비어있으면 같은 폴더의 WpfApp2.exe로 폴백
+            string appToStart = _appPath;
+            if (string.IsNullOrEmpty(appToStart) || !System.IO.File.Exists(appToStart))
+                appToStart = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.exe");
+
+            if (System.IO.File.Exists(appToStart))
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo(_appPath) { UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(appToStart) { UseShellExecute = true });
                 }
                 catch { }
             }

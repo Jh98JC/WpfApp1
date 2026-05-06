@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $updateXml = "updates\update.xml"
 $projectDir = "WpfApp2"
+$updaterDir = "WpfApp2.Updater"
 $projectFile = "$projectDir\WpfApp2.csproj"
 $publishDir = "publish\v$Version"
 $zipFile = "publish\WpfApp2-v$Version.zip"
@@ -53,7 +54,12 @@ if (Test-Path $publishDir) {
 }
 dotnet publish $projectDir -c Release -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  X Build failed" -ForegroundColor Red
+    Write-Host "  X WpfApp2 build failed" -ForegroundColor Red
+    exit 1
+}
+dotnet publish $updaterDir -c Release -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  X WpfApp2.Updater build failed" -ForegroundColor Red
     exit 1
 }
 Write-Host "  OK Build complete: $publishDir" -ForegroundColor Green
