@@ -39,7 +39,7 @@ namespace WpfApp2
             dbConfigBtn.Visibility = Session.IsMaster ? Visibility.Visible : Visibility.Collapsed;
 
             // Owner는 Show() 이후 설정되므로 Loaded에서 초기화
-            Loaded += (_, __) =>
+            Loaded += async (_, __) =>
             {
                 if (Owner is MainWindow main)
                 {
@@ -48,7 +48,107 @@ namespace WpfApp2
                     ShowTrayIconCheck.IsChecked = main.TrayIconVisible;
                     UpdateIconCardVisuals();
                 }
+                UpdatePosLastRunText();
+                await LoadPosLogsAsync();
             };
+        }
+
+        // ── 대진포스 쿼리 ─────────────────────────────────────────────────────
+
+        private void UpdatePosLastRunText()
+        {
+            if (!string.IsNullOrEmpty(DaejinPosService.LastRunInfo))
+                PosLastRunText.Text = DaejinPosService.LastRunInfo;
+            else if (DaejinPosService.IsRunning)
+                PosLastRunText.Text = "취합 중...";
+            else
+                PosLastRunText.Text = "미실행";
+        }
+
+        private async Task LoadPosLogsAsync()
+        {
+            PosLogPanel.Children.Clear();
+
+            if (!DatabaseService.IsDataConfigured)
+            {
+                PosLogEmpty.Text = "데이터 DB가 연결되지 않았습니다.";
+                PosLogEmpty.Visibility = Visibility.Visible;
+                return;
+            }
+
+            try
+            {
+                await DatabaseService.InitializePosTablesAsync();
+                var logs = await DatabaseService.GetCollectionLogsAsync();
+
+                if (logs.Count == 0)
+                {
+                    PosLogEmpty.Visibility = Visibility.Visible;
+                    return;
+                }
+
+                PosLogEmpty.Visibility = Visibility.Collapsed;
+                foreach (var log in logs)
+                {
+                    var tb = new System.Windows.Controls.TextBlock
+                    {
+                        Text = log.DisplayText,
+                        FontSize = 11,
+                        Foreground = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(0x55, 0x77, 0xA0)),
+                        Padding = new Thickness(0, 2, 0, 2)
+                    };
+                    PosLogPanel.Children.Add(tb);
+                }
+            }
+            catch
+            {
+                PosLogEmpty.Text = "불러오기 실패";
+                PosLogEmpty.Visibility = Visibility.Visible;
+            }
+        }
+
+        private async void posRunBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (!DatabaseService.IsDataConfigured)
+            {
+                PosLogEmpty.Text = "데이터 DB가 연결되지 않았습니다. DB 연결 설정을 확인하세요.";
+                PosLogEmpty.Visibility = Visibility.Visible;
+                return;
+            }
+
+            posRunBtn.IsEnabled = false;
+            posRunBtn.Content = "실행중...";
+
+            await DaejinPosService.RunAsync(DateTime.Today.AddDays(-1));
+
+            UpdatePosLastRunText();
+
+            if (!string.IsNullOrEmpty(DaejinPosService.LastError))
+            {
+                PosLogEmpty.Text = $"오류: {DaejinPosService.LastError}";
+                PosLogEmpty.Visibility = Visibility.Visible;
+            }
+
+            await LoadPosLogsAsync();
+
+            posRunBtn.Content = "수동 실행";
+            posRunBtn.IsEnabled = true;
+        }
+
+        private void posSkippedBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var win = new PosQueryWindow { Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            win.ShowDialog();
+        }
+
+        private void PosLogScroll_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            if (sender is System.Windows.Controls.ScrollViewer sv)
+            {
+                sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta / 3.0);
+                e.Handled = true;
+            }
         }
 
         private void IconRow_MouseDown(object sender, MouseButtonEventArgs e)

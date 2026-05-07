@@ -170,6 +170,78 @@
                         </StackPanel>
                     </Grid>
 
+                    <!-- 섹션 구분선 -->
+                    <Border Height="1" Background="{DynamicResource StatusBarBorderBrush}" Margin="0,16,0,16"/>
+
+                    <!-- 대진포스 쿼리 섹션 (다크 테마 고정) -->
+                    <Border Background="#0D0D14" CornerRadius="10" Padding="14,12,14,14">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="대진포스 쿼리" FontWeight="Bold" FontSize="12"
+                                           Foreground="#6868A0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="PosLastRunText" Grid.Column="1"
+                                           FontSize="10" Foreground="#505075"
+                                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button x:Name="posRunBtn" Content="수동 실행" Width="88" Height="28" FontSize="12"
+                                        Foreground="#C0C0D8" Click="posRunBtn_Click">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="bd" Background="#1E1E2E" BorderBrush="#2A2A3E"
+                                                    BorderThickness="1" CornerRadius="6">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="bd" Property="Background" Value="#252535"/>
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="bd" Property="Opacity" Value="0.5"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+
+                                <Button x:Name="posSkippedBtn" Content="취합누락" Width="88" Height="28" FontSize="12"
+                                        Foreground="#FFB347" Margin="8,0,0,0" Click="posSkippedBtn_Click">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="bd" Background="#1E1E2E" BorderBrush="#2A2A3E"
+                                                    BorderThickness="1" CornerRadius="6">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="bd" Property="Background" Value="#252535"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- 취합 로그 목록 -->
+                            <Border Background="#13131B" CornerRadius="6" Padding="8,6" MaxHeight="140">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                              PreviewMouseWheel="PosLogScroll_PreviewMouseWheel">
+                                    <StackPanel x:Name="PosLogPanel"/>
+                                </ScrollViewer>
+                            </Border>
+
+                            <TextBlock x:Name="PosLogEmpty" Text="취합 기록이 없습니다."
+                                       FontSize="11" Foreground="#404060"
+                                       Margin="0,6,0,0" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
                 </StackPanel>
             </ScrollViewer>
         </DockPanel>

@@ -1,0 +1,94 @@
+<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WpfApp2.PosQueryWindow"
+        Title="취합 누락 목록" Height="420" Width="480"
+        Icon="/대시보드아이콘 3.ico"
+        Background="Transparent"
+        ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True"
+        WindowStartupLocation="CenterOwner">
+
+    <Border BorderBrush="#2A2A3E" BorderThickness="1"
+            Background="#0D0D12"
+            CornerRadius="14">
+        <DockPanel>
+            <!-- 타이틀바 -->
+            <Border Background="#0D0D12" DockPanel.Dock="Top" CornerRadius="14,14,0,0"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid Height="40">
+                    <TextBlock Text="취합 누락 목록" VerticalAlignment="Center" Margin="16,0,0,0"
+                               FontWeight="Bold" FontSize="13" Foreground="#C0C0D8"/>
+                    <Button Content="✕" Click="Close_Click"
+                            Height="32" Width="40" HorizontalAlignment="Right" Margin="0,0,4,0"
+                            Background="Transparent" BorderThickness="0"
+                            Foreground="#808098" FontSize="14" Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="Transparent" CornerRadius="6">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#1E1E2E"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- 구분선 -->
+            <Border DockPanel.Dock="Top" Height="1" Background="#1E1E2E"/>
+
+            <!-- 콘텐츠 -->
+            <Grid Margin="14,12,14,14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 안내 텍스트 -->
+                <TextBlock x:Name="HeaderText" Grid.Row="0"
+                           Text="누락된 매장을 클릭하면 해당 매장만 취합합니다."
+                           FontSize="11" Foreground="#606080" Margin="0,0,0,10"/>
+
+                <!-- 누락 목록 -->
+                <Border Grid.Row="1" Background="#13131B" CornerRadius="8" Padding="0">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="SkippedList" Margin="0"/>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- 빈 상태 텍스트 -->
+                <TextBlock x:Name="EmptyText" Grid.Row="1"
+                           Text="누락된 매장이 없습니다."
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           FontSize="12" Foreground="#404060"
+                           Visibility="Collapsed"/>
+
+                <!-- 하단 버튼 -->
+                <Button x:Name="RefreshBtn" Grid.Row="2"
+                        Content="새로고침" Width="90" Height="28" FontSize="11"
+                        HorizontalAlignment="Right" Margin="0,10,0,0"
+                        Foreground="#A0A0C0" Cursor="Hand"
+                        Click="RefreshBtn_Click">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="#1E1E2E" BorderBrush="#2A2A3E"
+                                    BorderThickness="1" CornerRadius="6">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#252535"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </DockPanel>
+    </Border>
+</Window>

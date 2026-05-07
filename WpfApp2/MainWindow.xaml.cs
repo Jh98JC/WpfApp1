@@ -508,6 +508,46 @@ namespace WpfApp2
 
             string name = !string.IsNullOrEmpty(Session.DisplayName) ? Session.DisplayName : Session.Username;
             LoggedInUserText.Text = name;
+
+            DaejinPosService.StatusChanged -= OnPosStatusChanged;
+            DaejinPosService.StatusChanged += OnPosStatusChanged;
+            _ = DaejinPosService.RunAsync();
+        }
+
+        private void OnPosStatusChanged(string status)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (!string.IsNullOrEmpty(status))
+                {
+                    // 진행 중 — 주황색
+                    PosStatusText.Text = status;
+                    PosStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(0xFF, 0xB3, 0x47));
+                    PosStatusText.Visibility = Visibility.Visible;
+                }
+                else if (!string.IsNullOrEmpty(DaejinPosService.LastRunInfo))
+                {
+                    var info = DaejinPosService.LastRunInfo;
+                    PosStatusText.Text = info;
+
+                    // 오류 → 빨강, 이미취합·데이터없음 → 회색, 취합완료 → 초록
+                    System.Windows.Media.Color color;
+                    if (!string.IsNullOrEmpty(DaejinPosService.LastError))
+                        color = System.Windows.Media.Color.FromRgb(0xFF, 0x60, 0x60);
+                    else if (info.Contains("이미 취합됨") || info.Contains("데이터 없음") || info.Contains("미연결"))
+                        color = System.Windows.Media.Color.FromRgb(0x88, 0x88, 0xAA);
+                    else
+                        color = System.Windows.Media.Color.FromRgb(0x70, 0xC0, 0x70);
+
+                    PosStatusText.Foreground = new System.Windows.Media.SolidColorBrush(color);
+                    PosStatusText.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    PosStatusText.Visibility = Visibility.Collapsed;
+                }
+            });
         }
 
         private void adminbtn_Click(object sender, RoutedEventArgs e)
@@ -2864,12 +2904,20 @@ namespace WpfApp2
             dbValueCombo.SelectedIndex = 0;
             dbPanel.Children.Add(dbValueCombo);
 
+            // 날짜 변경을 이벤트로 캐싱 (AllowsTransparency 환경에서 SelectedDate 타이밍 이슈 방지)
+            DateTime? _dbStart = DateTime.Today.AddDays(-1);
+            DateTime? _dbEnd   = DateTime.Today.AddDays(-1);
+
             var dbDateRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "시작 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-            var dbStartDatePicker = new System.Windows.Controls.DatePicker { Width = 120, Margin = new Thickness(0, 0, 12, 0), SelectedDate = DateTime.Today.AddDays(-7) };
+            var dbStartDatePicker = new System.Windows.Controls.DatePicker { Width = 120, Margin = new Thickness(0, 0, 12, 0), SelectedDate = _dbStart };
+            dbStartDatePicker.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbStart = dp.SelectedDate; };
+            dbStartDatePicker.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbStart = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _dbStart = p; dp.SelectedDate = p; } };
             dbDateRow.Children.Add(dbStartDatePicker);
             dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "종료 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-            var dbEndDatePicker = new System.Windows.Controls.DatePicker { Width = 120, SelectedDate = DateTime.Today.AddDays(-1) };
+            var dbEndDatePicker = new System.Windows.Controls.DatePicker { Width = 120, SelectedDate = _dbEnd };
+            dbEndDatePicker.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbEnd = dp.SelectedDate; };
+            dbEndDatePicker.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbEnd = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _dbEnd = p; dp.SelectedDate = p; } };
             dbDateRow.Children.Add(dbEndDatePicker);
             dbPanel.Children.Add(dbDateRow);
 
@@ -2967,8 +3015,8 @@ namespace WpfApp2
                             meta.DataSource = "Db";
                             meta.DbGroupBy = dbGroupByCombo.SelectedItem?.ToString() ?? "매장명";
                             meta.DbValueColumn = dbValueCombo.SelectedItem?.ToString() ?? "총매출액";
-                            meta.DbStartDate = dbStartDatePicker.SelectedDate;
-                            meta.DbEndDate = dbEndDatePicker.SelectedDate;
+                            meta.DbStartDate = _dbStart;
+                            meta.DbEndDate = _dbEnd;
                             meta.DbStoreName = dbStoreBox.SelectedIndex <= 0 ? null : dbStoreBox.SelectedItem?.ToString();
                             meta.DbMiddleCategoryFilter = dbMiddleCatBox.SelectedIndex <= 0 ? null : dbMiddleCatBox.SelectedItem?.ToString();
                             meta.DbMenuNameFilter = dbMenuBox.SelectedIndex <= 0 ? null : dbMenuBox.SelectedItem?.ToString();
@@ -3082,6 +3130,16 @@ namespace WpfApp2
 
             contextMenu.Items.Add(editItem);
             contextMenu.Items.Add(refreshItem);
+
+            if (meta.DataSource == "Db" || meta.ChartType == "RankList")
+            {
+                contextMenu.Items.Add(new System.Windows.Controls.Separator());
+                var exportItem = new System.Windows.Controls.MenuItem { Header = "EXCEL  전체기간 내보내기" };
+                exportItem.Click += async (s, ev) => await ExportFullDbDataAsync(meta);
+                contextMenu.Items.Add(exportItem);
+                contextMenu.Items.Add(new System.Windows.Controls.Separator());
+            }
+
             contextMenu.Items.Add(deleteItem);
             border.ContextMenu = contextMenu;
 
@@ -3510,7 +3568,7 @@ namespace WpfApp2
             }
 
             var groupBy = AllowedGroupByColumns.Contains(meta.DbGroupBy ?? "") ? meta.DbGroupBy! : "매장명";
-            var start   = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+            var start   = meta.DbStartDate ?? DateTime.Today.AddDays(-1);
             var end     = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
 
             // 원본 레코드 조회
@@ -3568,7 +3626,7 @@ ORDER BY 날짜 DESC";
             titleBar.SetResourceReference(Border.BackgroundProperty, "StatusBarBackgroundBrush");
             titleBar.MouseLeftButtonDown += (s, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
             var titleRow = new Grid();
-            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
             titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
             var titleTb = new System.Windows.Controls.TextBlock
@@ -3579,6 +3637,30 @@ ORDER BY 날짜 DESC";
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 TextAlignment = System.Windows.TextAlignment.Center,
                 Foreground = System.Windows.Media.Brushes.White
+            };
+            // 엑셀 내보내기 버튼
+            var excelHost = new Border
+            {
+                Width = 84, Height = 26, Margin = new Thickness(6, 0, 0, 0),
+                CornerRadius = new CornerRadius(5),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(60, 255, 255, 255)),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+            };
+            excelHost.Child = new System.Windows.Controls.TextBlock
+            {
+                Text = "EXCEL", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                Foreground = System.Windows.Media.Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+            };
+            excelHost.MouseEnter += (s, e) => ((Border)s).Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(90, 255, 255, 255));
+            excelHost.MouseLeave += (s, e) => ((Border)s).Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(60, 255, 255, 255));
+            excelHost.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                ExportToCsv(rows, $"{groupValue}_{start:yyyyMMdd}_{end:yyyyMMdd}");
+                e.Handled = true;
             };
             var closeHost = new Border
             {
@@ -3598,8 +3680,10 @@ ORDER BY 날짜 DESC";
             closeHost.MouseEnter += (s, e) => { ((Border)s).Opacity = 1.0; ((Border)s).Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 255, 255, 255)); };
             closeHost.MouseLeave += (s, e) => { ((Border)s).Opacity = 0.75; ((Border)s).Background = System.Windows.Media.Brushes.Transparent; };
             closeHost.PreviewMouseLeftButtonDown += (s, e) => { win.Close(); e.Handled = true; };
+            Grid.SetColumn(excelHost, 0);
             Grid.SetColumn(titleTb, 1);
             Grid.SetColumn(closeHost, 2);
+            titleRow.Children.Add(excelHost);
             titleRow.Children.Add(titleTb);
             titleRow.Children.Add(closeHost);
             titleBar.Child = titleRow;
@@ -4484,8 +4568,14 @@ ORDER BY 날짜 DESC";
                 mainStack.Children.Add(SectionCard("집계", aggBody));
 
                 // 기간 섹션
-                var eStartDate = new System.Windows.Controls.DatePicker { Height = 28, Margin = new Thickness(0, 0, 6, 0), SelectedDate = meta.DbStartDate ?? DateTime.Today.AddDays(-7) };
-                var eEndDate   = new System.Windows.Controls.DatePicker { Height = 28, SelectedDate = meta.DbEndDate ?? DateTime.Today.AddDays(-1) };
+                DateTime? _eStart = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+                DateTime? _eEnd   = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
+                var eStartDate = new System.Windows.Controls.DatePicker { Height = 28, Margin = new Thickness(0, 0, 6, 0), SelectedDate = _eStart };
+                eStartDate.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _eStart = dp.SelectedDate; };
+                eStartDate.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _eStart = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _eStart = p; dp.SelectedDate = p; } };
+                var eEndDate   = new System.Windows.Controls.DatePicker { Height = 28, SelectedDate = _eEnd };
+                eEndDate.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _eEnd = dp.SelectedDate; };
+                eEndDate.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _eEnd = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _eEnd = p; dp.SelectedDate = p; } };
                 var dateRow = new Grid();
                 dateRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 dateRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -4683,8 +4773,8 @@ ORDER BY 날짜 DESC";
                 {
                     meta.DbGroupBy = eGroupByCombo.SelectedItem?.ToString() ?? "매장명";
                     meta.DbValueColumn = eValueCombo.SelectedItem?.ToString() ?? "총매출액";
-                    meta.DbStartDate = eStartDate.SelectedDate;
-                    meta.DbEndDate = eEndDate.SelectedDate;
+                    meta.DbStartDate = _eStart;
+                    meta.DbEndDate = _eEnd;
                     meta.DbStoreName = eStoreBox.SelectedIndex <= 0 ? null : eStoreBox.SelectedItem?.ToString();
                     meta.DbMiddleCategoryFilter = eMiddleCatBox.SelectedIndex <= 0 ? null : eMiddleCatBox.SelectedItem?.ToString();
                     meta.DbMenuNameFilter = eMenuBox.SelectedIndex <= 0 ? null : eMenuBox.SelectedItem?.ToString();
@@ -4862,6 +4952,81 @@ ORDER BY 날짜 DESC";
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbDistinctValues] column={column} : {ex.Message}"); }
             return result;
+        }
+
+        // ── 엑셀(CSV) 내보내기 ───────────────────────────────────────────────
+
+        private static void ExportToCsv(System.Data.DataTable dt, string fileNamePrefix)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                    $"{fileNamePrefix}_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+
+                using var sw = new System.IO.StreamWriter(path, false, new System.Text.UTF8Encoding(true));
+
+                var cols = new System.Collections.Generic.List<string>();
+                foreach (System.Data.DataColumn c in dt.Columns)
+                    cols.Add($"\"{c.ColumnName}\"");
+                sw.WriteLine(string.Join(",", cols));
+
+                foreach (System.Data.DataRow row in dt.Rows)
+                {
+                    var cells = new System.Collections.Generic.List<string>();
+                    foreach (System.Data.DataColumn c in dt.Columns)
+                    {
+                        var val = row[c]?.ToString() ?? "";
+                        cells.Add($"\"{val.Replace("\"", "\"\"")}\"");
+                    }
+                    sw.WriteLine(string.Join(",", cells));
+                }
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"내보내기 오류: {ex.Message}");
+            }
+        }
+
+        private async Task ExportFullDbDataAsync(ChartMeta meta)
+        {
+            string cs = DatabaseService.DataConnectionString;
+            if (string.IsNullOrWhiteSpace(cs)) { System.Windows.MessageBox.Show("데이터 DB가 설정되지 않았습니다."); return; }
+
+            var start = meta.DbStartDate ?? DateTime.Today.AddDays(-1);
+            var end   = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
+
+            var dt = new System.Data.DataTable();
+            try
+            {
+                const string sql = """
+                    SELECT 날짜, 매장명, 중분류, 메뉴명, 총매출액, 총수량, 판매수량, 서비스수량
+                    FROM 매출데이터
+                    WHERE 날짜 BETWEEN @start AND @end
+                      AND (@store IS NULL OR 매장명 = @store)
+                      AND (@middleCat IS NULL OR 중분류 = @middleCat)
+                      AND (@menuName IS NULL OR 메뉴명 = @menuName)
+                    ORDER BY 날짜 DESC, 매장명
+                    """;
+                await using var conn = new SqlConnection(cs);
+                await conn.OpenAsync();
+                using var adapter = new SqlDataAdapter(sql, conn);
+                adapter.SelectCommand.Parameters.AddWithValue("@start", start.Date);
+                adapter.SelectCommand.Parameters.AddWithValue("@end",   end.Date);
+                adapter.SelectCommand.Parameters.AddWithValue("@store",     (object?)meta.DbStoreName             ?? DBNull.Value);
+                adapter.SelectCommand.Parameters.AddWithValue("@middleCat", (object?)meta.DbMiddleCategoryFilter  ?? DBNull.Value);
+                adapter.SelectCommand.Parameters.AddWithValue("@menuName",  (object?)meta.DbMenuNameFilter        ?? DBNull.Value);
+                adapter.Fill(dt);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"조회 오류: {ex.Message}");
+                return;
+            }
+
+            ExportToCsv(dt, $"전체매출자료_{start:yyyyMMdd}_{end:yyyyMMdd}");
         }
 
         private static readonly HashSet<string> AllowedGroupByColumns = new() { "매장명", "중분류", "메뉴명" };

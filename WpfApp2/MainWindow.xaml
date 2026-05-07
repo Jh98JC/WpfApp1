@@ -66,6 +66,11 @@
                         <ColumnDefinition Width="80"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0">
+                        <TextBlock x:Name="PosStatusText"
+                                   VerticalAlignment="Center"
+                                   FontSize="11" Margin="0,0,8,0"
+                                   Foreground="#FFB347"
+                                   Visibility="Collapsed"/>
                         <TextBlock x:Name="LoggedInUserText"
                                    VerticalAlignment="Center"
                                    FontSize="11" Margin="0,0,10,0"
