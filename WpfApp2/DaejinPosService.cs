@@ -27,6 +27,22 @@ namespace WpfApp2
         public static string LastRunInfo { get; private set; } = string.Empty;
         public static DateTime? LastRunTime { get; private set; }
 
+        // 현재 백그라운드로 실행 중인 대진포스 쿼리.exe의 PID — 보기 버튼에서 사용
+        public static int? RunningProcessId { get; private set; }
+
+        // 자동 수집 시 사용할 기준 날짜 — 한국 시간 기준 오전 8시 이전이면 그저께, 이후면 어제
+        // 새벽 시간대(0~7시)에 어제 데이터가 아직 POS에 도착 안 한 경우를 회피하기 위함.
+        public static DateTime GetAutoTargetDate()
+        {
+            TimeZoneInfo kst;
+            try { kst = TimeZoneInfo.FindSystemTimeZoneById("Korea Standard Time"); }
+            catch { kst = TimeZoneInfo.Local; }
+
+            var nowKst = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, kst);
+            int daysBack = nowKst.Hour < 8 ? 2 : 1;
+            return nowKst.Date.AddDays(-daysBack);
+        }
+
         // 한 세션 내에서 같은 날짜 스크래퍼를 반복 실행하지 않도록 추적
         private static readonly HashSet<DateTime> _scrapedDatesThisSession = new();
 
@@ -44,7 +60,7 @@ namespace WpfApp2
                 return;
             }
 
-            var date = (targetDate ?? DateTime.Today.AddDays(-1)).Date;
+            var date = (targetDate ?? GetAutoTargetDate()).Date;
 
             try
             {
@@ -139,11 +155,25 @@ namespace WpfApp2
 
                     List<string> storeNames;
                     if (configuredStores.Count > 0)
+                    {
                         // pos_stores.json에 매장명만 지정된 경우
                         storeNames = configuredStores.ConvertAll(s => s.StoreName);
+                    }
                     else
-                        // 완전 자동: 최근 7일 매출데이터에서 매장 목록 추출
-                        storeNames = await DatabaseService.GetRecentStoreNamesAsync(7);
+                    {
+                        // 1차: store_mapping.json에 'lastSeenDate=오늘 날짜'인 매장만 추출 (= 윗표 Sch01에 등장한 활성 매장)
+                        // 윗표에 없는 매장(폐업/이관 등)은 누락 후보에서 제외.
+                        var dateStr = date.ToString("yyyy-MM-dd");
+                        var mapping = StoreMappingService.Load();
+                        storeNames = mapping.Stores
+                            .Where(kv => string.Equals(kv.Value.LastSeenDate, dateStr, StringComparison.Ordinal))
+                            .Select(kv => kv.Key)
+                            .ToList();
+
+                        // 매핑이 비어있거나 그 날짜 학습이 안 된 경우 → 폴백: 최근 7일 매출데이터 기반
+                        if (storeNames.Count == 0)
+                            storeNames = await DatabaseService.GetRecentStoreNamesAsync(7);
+                    }
 
                     foreach (var storeName in storeNames)
                     {
@@ -190,29 +220,127 @@ namespace WpfApp2
             }
         }
 
+        // 재추출: 해당 날짜의 데이터를 모두 삭제하고 다시 수집한다.
+        public static async Task ForceRunAsync(DateTime date)
+        {
+            if (IsRunning) return;
+            if (!DatabaseService.IsDataConfigured)
+            {
+                LastError = "데이터 DB 미연결";
+                LastRunInfo = $"[{DateTime.Now:HH:mm}] DB 미연결 — 데이터 연결 설정을 확인하세요.";
+                LastRunTime = DateTime.Now;
+                StatusChanged?.Invoke(string.Empty);
+                return;
+            }
+
+            var d = date.Date;
+
+            // 세션 캐시에서 이 날짜 제거 (이미 스크랩 시도했더라도 재시도되도록)
+            lock (_scrapedDatesThisSession) _scrapedDatesThisSession.Remove(d);
+
+            StatusChanged?.Invoke($"{d:yyyy-MM-dd} 데이터 정리 중...");
+            try
+            {
+                await DatabaseService.InitializePosTablesAsync();
+                int deleted = await DatabaseService.DeleteSalesDataForDateAsync(d);
+                await DatabaseService.DeleteCollectionLogForDateAsync(d);
+                await DatabaseService.DeleteSkippedStoresForDateAsync(d);
+                LastRunInfo = $"[{DateTime.Now:HH:mm}] {d:yyyy-MM-dd} 기존 {deleted}건 삭제, 재수집 시작";
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                LastRunInfo = $"[{DateTime.Now:HH:mm}] {d:yyyy-MM-dd} 재추출 준비 오류 — {ex.Message}";
+                LastRunTime = DateTime.Now;
+                StatusChanged?.Invoke(string.Empty);
+                return;
+            }
+
+            await RunAsync(d);
+        }
+
         public static async Task<bool> RunForStoreAsync(string storeName, DateTime date)
         {
             if (!DatabaseService.IsDataConfigured) return false;
 
             try { await DatabaseService.InitializePosTablesAsync(); } catch { return false; }
 
+            // 1) 별도 POS DB 연결이 정의되어 있으면 그쪽으로 직접 쿼리
             var configuredStores = LoadStoreConfigs();
             var store = configuredStores.Find(s => s.StoreName == storeName);
-
-            bool ok = false;
-            try
+            if (store != null && !string.IsNullOrWhiteSpace(store.ConnectionString))
             {
-                if (store != null && !string.IsNullOrWhiteSpace(store.ConnectionString))
-                    ok = await TryCollectFromExternalAsync(store, date);
-                else
-                    ok = await DatabaseService.CheckAndRecordStoreSalesAsync(date, storeName);
+                bool extOk = false;
+                try { extOk = await TryCollectFromExternalAsync(store, date); } catch { return false; }
+                if (extOk)
+                    try { await DatabaseService.DeleteSkippedStoreByNameAndDateAsync(date, storeName); } catch { }
+                return extOk;
             }
-            catch { return false; }
 
-            if (ok)
+            // 2) 매장 → 계정 매핑이 있으면 → 대진포스 쿼리.exe를 단일 매장 모드로 재실행
+            var mapping = StoreMappingService.Find(storeName);
+            if (mapping != null && !string.IsNullOrEmpty(mapping.AccountId))
+            {
+                if (IsRunning)
+                {
+                    LastError = "다른 작업 진행 중";
+                    return false;
+                }
+                IsRunning = true;
+                StatusChanged?.Invoke($"{storeName} 재취합 중... ({mapping.AccountId} 계정)");
+                try
+                {
+                    // 매장의 잔여 데이터가 잘못된 경우 대비해 먼저 삭제
+                    try { await DatabaseService.DeleteSalesDataForStoreAsync(date, storeName); } catch { }
+
+                    var (launched, success, msg) = await TryRunExternalScraperAsync(date, storeName);
+                    if (!launched)
+                    {
+                        LastError = msg;
+                        LastRunInfo = $"[{DateTime.Now:HH:mm}] {storeName} 재취합 실패 — {msg}";
+                        try { await DatabaseService.UpdateSkippedStoreReasonAsync(date, storeName, $"재취합 실패: {msg}"); } catch { }
+                        return false;
+                    }
+                    if (!success)
+                    {
+                        LastError = msg;
+                        LastRunInfo = $"[{DateTime.Now:HH:mm}] {storeName} 재취합 실패 — {msg}";
+                        try { await DatabaseService.UpdateSkippedStoreReasonAsync(date, storeName, $"재취합 실패: {msg}"); } catch { }
+                        return false;
+                    }
+                }
+                finally
+                {
+                    IsRunning = false;
+                    StatusChanged?.Invoke(string.Empty);
+                }
+
+                // 3) 재수집 후 매출데이터에서 해당 매장 행이 들어왔는지 확인하고 StoreSales에 합계 기록
+                bool ok = false;
+                try { ok = await DatabaseService.CheckAndRecordStoreSalesAsync(date, storeName); } catch { return false; }
+                if (ok)
+                {
+                    LastRunInfo = $"[{DateTime.Now:HH:mm}] {storeName} 재취합 완료";
+                    try { await DatabaseService.DeleteSkippedStoreByNameAndDateAsync(date, storeName); } catch { }
+                }
+                else
+                {
+                    LastError = "스크래퍼 종료 후에도 매출데이터에 행이 없음 (클릭 실패 또는 로딩 타임아웃)";
+                    LastRunInfo = $"[{DateTime.Now:HH:mm}] {storeName} 재취합 실패 — 데이터 미도착";
+                    try { await DatabaseService.UpdateSkippedStoreReasonAsync(date, storeName, "재취합 실패: 스크래퍼 종료 후 데이터 미도착"); } catch { }
+                }
+                return ok;
+            }
+
+            // 3) 매핑이 없으면 fallback — 매출데이터에 이미 있는지만 확인
+            bool fallbackOk = false;
+            try { fallbackOk = await DatabaseService.CheckAndRecordStoreSalesAsync(date, storeName); } catch { return false; }
+            if (fallbackOk)
                 try { await DatabaseService.DeleteSkippedStoreByNameAndDateAsync(date, storeName); } catch { }
+            else
+                LastError = "매핑 없음 — 전체 수집을 한 번 실행해 매핑을 만든 뒤 재시도하세요";
 
-            return ok;
+            return fallbackOk;
         }
 
         private static async Task<bool> TryCollectFromExternalAsync(PosStoreConfig store, DateTime date)
@@ -248,8 +376,37 @@ namespace WpfApp2
             catch { return new List<PosStoreConfig>(); }
         }
 
+        // ── 대진포스 쿼리.exe를 사용자 모드로 실행 (--auto 없이) ────────────
+        public static (bool launched, string message) LaunchInteractive()
+        {
+            string? exePath = FindScraperExe();
+            if (exePath == null)
+                return (false, "대진포스 쿼리.exe를 찾을 수 없음");
+
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(exePath)
+                {
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory
+                };
+                var proc = System.Diagnostics.Process.Start(psi);
+                if (proc == null)
+                    return (false, "Process.Start 실패");
+                ChildProcessTracker.AddProcess(proc);
+                return (true, exePath);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"실행 오류: {ex.Message}");
+            }
+        }
+
         // ── 외부 대진포스 쿼리.exe 자동 호출 ─────────────────────────────────
-        private static async Task<(bool launched, bool success, string message)> TryRunExternalScraperAsync(DateTime date)
+        private static Task<(bool launched, bool success, string message)> TryRunExternalScraperAsync(DateTime date)
+            => TryRunExternalScraperAsync(date, storeName: null);
+
+        private static async Task<(bool launched, bool success, string message)> TryRunExternalScraperAsync(DateTime date, string? storeName)
         {
             string? exePath = FindScraperExe();
             if (exePath == null)
@@ -262,12 +419,16 @@ namespace WpfApp2
             try { Directory.CreateDirectory(Path.GetDirectoryName(statusFile)!); } catch { }
             try { if (File.Exists(statusFile)) File.Delete(statusFile); } catch { }
 
+            string args = $"--auto --date={date:yyyy-MM-dd} --status=\"{statusFile}\"";
+            if (!string.IsNullOrEmpty(storeName))
+                args += $" --store=\"{storeName}\"";
+
             System.Diagnostics.Process? process = null;
             try
             {
                 var psi = new System.Diagnostics.ProcessStartInfo(exePath)
                 {
-                    Arguments = $"--auto --date={date:yyyy-MM-dd} --status=\"{statusFile}\"",
+                    Arguments = args,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory
@@ -275,6 +436,8 @@ namespace WpfApp2
                 process = System.Diagnostics.Process.Start(psi);
                 if (process == null)
                     return (true, false, "Process.Start 실패");
+                ChildProcessTracker.AddProcess(process);
+                RunningProcessId = process.Id;
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
                 try
@@ -302,6 +465,7 @@ namespace WpfApp2
             finally
             {
                 try { if (File.Exists(statusFile)) File.Delete(statusFile); } catch { }
+                RunningProcessId = null;
                 process?.Dispose();
             }
         }

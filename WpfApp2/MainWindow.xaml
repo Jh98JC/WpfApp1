@@ -53,6 +53,7 @@
             </Setter>
         </Style>
     </Window.Resources>
+    <Grid>
     <Border x:Name="RootBorder" BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
             Background="{DynamicResource WindowBackgroundBrush}"
             CornerRadius="16">
@@ -68,9 +69,40 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0">
                         <TextBlock x:Name="PosStatusText"
                                    VerticalAlignment="Center"
-                                   FontSize="11" Margin="0,0,8,0"
+                                   FontSize="11" Margin="0,0,4,0"
                                    Foreground="#FFB347"
                                    Visibility="Collapsed"/>
+                        <Button x:Name="PosShowBtn"
+                                Content="보기"
+                                Width="44" Height="20"
+                                FontSize="10"
+                                Margin="0,0,8,0"
+                                Padding="2,0,2,0"
+                                VerticalAlignment="Center"
+                                Cursor="Hand"
+                                Foreground="#FFB347"
+                                BorderBrush="#FFB347"
+                                Background="Transparent"
+                                BorderThickness="1"
+                                Click="PosShowBtn_Click"
+                                Visibility="Collapsed">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd"
+                                            Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            CornerRadius="3">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#22FFB347"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
                         <TextBlock x:Name="LoggedInUserText"
                                    VerticalAlignment="Center"
                                    FontSize="11" Margin="0,0,10,0"
@@ -277,4 +309,14 @@
             </DockPanel>
         </DockPanel>
     </Border>
+
+    <!-- 누락목록 오버레이 -->
+    <Grid x:Name="PosQueryOverlay" Visibility="Collapsed"
+          Background="#90000000"
+          MouseLeftButtonDown="PosQueryOverlay_BackdropClick">
+        <local:PosQueryControl x:Name="PosQueryPanel"
+                               Width="480" Height="420"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Grid>
+    </Grid>
 </Window>

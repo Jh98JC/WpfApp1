@@ -94,10 +94,9 @@ namespace WpfApp2
                     {
                         Text = log.DisplayText,
                         FontSize = 11,
-                        Foreground = new System.Windows.Media.SolidColorBrush(
-                            System.Windows.Media.Color.FromRgb(0x55, 0x77, 0xA0)),
                         Padding = new Thickness(0, 2, 0, 2)
                     };
+                    tb.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
                     PosLogPanel.Children.Add(tb);
                 }
             }
@@ -108,38 +107,23 @@ namespace WpfApp2
             }
         }
 
-        private async void posRunBtn_Click(object sender, RoutedEventArgs e)
+        private void posRunBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (!DatabaseService.IsDataConfigured)
+            // 수동 실행: 대진포스 쿼리.exe를 사용자 모드로 실행하여 직접 날짜를 설정할 수 있게 함
+            var (launched, msg) = DaejinPosService.LaunchInteractive();
+            if (!launched)
             {
-                PosLogEmpty.Text = "데이터 DB가 연결되지 않았습니다. DB 연결 설정을 확인하세요.";
-                PosLogEmpty.Visibility = Visibility.Visible;
-                return;
-            }
-
-            posRunBtn.IsEnabled = false;
-            posRunBtn.Content = "실행중...";
-
-            await DaejinPosService.RunAsync(DateTime.Today.AddDays(-1));
-
-            UpdatePosLastRunText();
-
-            if (!string.IsNullOrEmpty(DaejinPosService.LastError))
-            {
-                PosLogEmpty.Text = $"오류: {DaejinPosService.LastError}";
+                PosLogEmpty.Text = $"실행 실패: {msg}";
                 PosLogEmpty.Visibility = Visibility.Visible;
             }
-
-            await LoadPosLogsAsync();
-
-            posRunBtn.Content = "수동 실행";
-            posRunBtn.IsEnabled = true;
         }
 
         private void posSkippedBtn_Click(object sender, RoutedEventArgs e)
         {
-            var win = new PosQueryWindow { Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-            win.ShowDialog();
+            // 별도 창 대신 메인 창의 오버레이로 표시
+            var main = Owner as MainWindow;
+            Close(); // Setting 창 먼저 닫음
+            main?.ShowPosQuery();
         }
 
         private void PosLogScroll_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)

@@ -110,6 +110,8 @@
     <Compile Include="DbSaver.cs" />
     <Compile Include="RecordedAction.cs" />
     <Compile Include="SalesData.cs" />
+    <Compile Include="StoreMappingService.cs" />
+    <Compile Include="TopintApiClient.cs" />
     <Compile Include="WebScraper.cs" />
     <Page Include="AccountSelectionDialog.xaml">
       <Generator>MSBuild:Compile</Generator>

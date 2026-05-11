@@ -415,6 +415,44 @@ namespace WpfApp2
             catch { }
         }
 
+        // 재추출용: 해당 날짜의 매출데이터 모두 삭제
+        public static async Task<int> DeleteSalesDataForDateAsync(DateTime date)
+        {
+            const string sql = "DELETE FROM 매출데이터 WHERE CAST(날짜 AS DATE) = @date";
+            await using var conn = new SqlConnection(DataConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@date", date.Date);
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 재추출용: 해당 날짜의 취합 로그 삭제
+        public static async Task DeleteCollectionLogForDateAsync(DateTime date)
+        {
+            try
+            {
+                const string sql = "DELETE FROM CollectionLogs WHERE CAST(CollectionDate AS DATE) = @date";
+                await using var conn = new SqlConnection(DataConnectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@date", date.Date);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            catch { }
+        }
+
+        // 단일 매장의 매출데이터 삭제 (재취합 전 정리용)
+        public static async Task<int> DeleteSalesDataForStoreAsync(DateTime date, string storeName)
+        {
+            const string sql = "DELETE FROM 매출데이터 WHERE CAST(날짜 AS DATE) = @date AND 매장명 = @store";
+            await using var conn = new SqlConnection(DataConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@date", date.Date);
+            cmd.Parameters.AddWithValue("@store", storeName);
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
         public static async Task SaveSalesDataAsync(DateTime date, string storeName, decimal totalAmount)
         {
             const string sql = """
@@ -522,6 +560,50 @@ namespace WpfApp2
             cmd.Parameters.AddWithValue("@date", date.Date);
             cmd.Parameters.AddWithValue("@store", storeName);
             await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 누락목록의 특정 Id 1건 삭제
+        public static async Task DeleteSkippedStoreByIdAsync(int id)
+        {
+            const string sql = "DELETE FROM SkippedStores WHERE Id = @id";
+            await using var conn = new SqlConnection(DataConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id", id);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 누락목록 전체 삭제
+        public static async Task<int> DeleteAllSkippedStoresAsync()
+        {
+            const string sql = "DELETE FROM SkippedStores";
+            await using var conn = new SqlConnection(DataConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand(sql, conn);
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 재취합 시도 후 실패 시 누락목록의 사유를 구체적으로 갱신
+        public static async Task UpdateSkippedStoreReasonAsync(DateTime date, string storeName, string reason)
+        {
+            try
+            {
+                const string sql = @"
+                    IF EXISTS (SELECT 1 FROM SkippedStores WHERE CollectionDate = @date AND StoreName = @store)
+                        UPDATE SkippedStores SET Reason = @reason
+                        WHERE CollectionDate = @date AND StoreName = @store
+                    ELSE
+                        INSERT INTO SkippedStores (CollectionDate, StoreName, Reason)
+                        VALUES (@date, @store, @reason)";
+                await using var conn = new SqlConnection(DataConnectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@date", date.Date);
+                cmd.Parameters.AddWithValue("@store", storeName);
+                cmd.Parameters.AddWithValue("@reason", reason ?? string.Empty);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            catch { }
         }
 
         // ── 자동 모드: 매출데이터 테이블에서 직접 취합 ─────────────────────

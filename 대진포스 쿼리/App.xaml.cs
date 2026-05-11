@@ -9,6 +9,8 @@ namespace 대진포스_쿼리
         public static bool AutoMode { get; private set; }
         public static DateTime AutoModeDate { get; private set; } = DateTime.Today.AddDays(-1);
         public static string AutoModeStatusFile { get; private set; } = string.Empty;
+        // --store=매장명 인자: 특정 매장만 재취합하는 모드
+        public static string StoreFilter { get; private set; } = string.Empty;
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -37,6 +39,13 @@ namespace 대진포스_쿼리
                          arg.StartsWith("/status:", StringComparison.OrdinalIgnoreCase))
                 {
                     AutoModeStatusFile = arg.Substring(arg.IndexOfAny(new[] { '=', ':' }) + 1).Trim('"');
+                }
+                else if (arg.StartsWith("--store=", StringComparison.OrdinalIgnoreCase) ||
+                         arg.StartsWith("/store=", StringComparison.OrdinalIgnoreCase) ||
+                         arg.StartsWith("/store:", StringComparison.OrdinalIgnoreCase))
+                {
+                    StoreFilter = arg.Substring(arg.IndexOfAny(new[] { '=', ':' }) + 1).Trim('"');
+                    AutoMode = true; // 매장 필터는 자동 모드 전제
                 }
             }
         }

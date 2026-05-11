@@ -35,8 +35,13 @@ namespace 대진포스_쿼리
         private DateTime? _collectStartDate = null;
         private DateTime? _collectEndDate = null;
 
-        // 📁 데이터 저장 경로 상수
-        private readonly string DATA_OUTPUT_PATH = @"C:\Users\jc941\Desktop\VSCODE\데이터 더미";
+        // 단일 매장 모드(--store)에서 명확한 실패 사유를 기록 (status 파일로 회신)
+        private string _autoModeFailReason = null;
+
+        // 📁 데이터 저장 경로: 사용자의 Documents\대진포스쿼리\데이터
+        private readonly string DATA_OUTPUT_PATH = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "대진포스쿼리", "데이터");
 
         // 🔍 디버그 로그 경로
         private string _debugLogPath;
@@ -55,9 +60,114 @@ namespace 대진포스_쿼리
             if (App.AutoMode)
             {
                 Title = $"대진포스 쿼리 (자동수집 {App.AutoModeDate:yyyy-MM-dd})";
-                WindowState = WindowState.Minimized;
+                // 화면 밖으로 이동 + 작업표시줄에서 제거 → 사용자에게 보이지 않음.
+                // Minimized로 만들면 일부 환경에서 왼쪽 하단에 미니 썸네일이 뜨므로 사용 안 함.
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = -32000;
+                Top  = -32000;
                 ShowInTaskbar = false;
                 Loaded += AutoModeStartup;
+
+                // 부모(WpfApp2)의 '보기' 버튼 신호를 명명된 이벤트로 수신.
+                // 이름 규칙: "DaejinPosShow_{현재 PID}" — 부모는 자식 PID를 알고 있으므로 매칭.
+                StartShowSignalWorker();
+            }
+
+            Closed += (_, __) =>
+            {
+                try { _showCts?.Cancel(); } catch { }
+                try { _showSignal?.Dispose(); } catch { }
+            };
+        }
+
+        private System.Threading.EventWaitHandle _showSignal;
+        private System.Threading.EventWaitHandle _hideSignal;
+        private System.Threading.CancellationTokenSource _showCts;
+
+        // 자동 수집이 정상 완료되어 Application.Shutdown을 호출했을 때 true.
+        // OnClosing에서 사용자 닫기(X)와 정상 종료를 구분하는 데 사용.
+        public static bool ShutdownInitiated = false;
+
+        public static void ShutdownAuto(int code)
+        {
+            ShutdownInitiated = true;
+            var app = System.Windows.Application.Current;
+            app?.Shutdown(code);
+        }
+
+        private void StartShowSignalWorker()
+        {
+            try
+            {
+                int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                _showSignal = new System.Threading.EventWaitHandle(
+                    false, System.Threading.EventResetMode.AutoReset, "DaejinPosShow_" + pid);
+                _hideSignal = new System.Threading.EventWaitHandle(
+                    false, System.Threading.EventResetMode.AutoReset, "DaejinPosHide_" + pid);
+                _showCts = new System.Threading.CancellationTokenSource();
+                var token = _showCts.Token;
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    var handles = new System.Threading.WaitHandle[]
+                    {
+                        _showSignal, _hideSignal, token.WaitHandle
+                    };
+                    while (!token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            int idx = System.Threading.WaitHandle.WaitAny(handles, 500);
+                            if (idx == 0) Dispatcher.Invoke(new Action(ShowFromBackground));
+                            else if (idx == 1) Dispatcher.Invoke(new Action(HideToBackground));
+                            else if (idx == 2) break; // 취소
+                            // else timeout: 루프 계속
+                        }
+                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ShowWorker] {ex.Message}"); break; }
+                    }
+                });
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[StartShowSignalWorker] {ex.Message}"); }
+        }
+
+        private void ShowFromBackground()
+        {
+            try
+            {
+                double w = 1100, h = 720;
+                Width = w;
+                Height = h;
+                Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth  - w) / 2);
+                Top  = Math.Max(0, (SystemParameters.PrimaryScreenHeight - h) / 2);
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                // ShowInTaskbar는 변경하지 않음 — 변경 시 WPF가 HWND를 재생성해 WebView2가 깨질 수 있음.
+                Topmost = true;
+                Activate();
+                Topmost = false;
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ShowFromBackground] {ex.Message}"); }
+        }
+
+        private void HideToBackground()
+        {
+            try
+            {
+                // 화면 밖으로 다시 이동 (크기는 유지)
+                Left = -32000;
+                Top  = -32000;
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[HideToBackground] {ex.Message}"); }
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            base.OnClosing(e);
+            if (e.Cancel) return;
+            // 자동 수집 중에 사용자가 X를 눌러도 종료하지 않고 다시 숨김 처리.
+            // 자동 수집이 끝나 ShutdownAuto가 호출된 경우엔 정상 종료 허용.
+            if (App.AutoMode && !ShutdownInitiated)
+            {
+                e.Cancel = true;
+                Dispatcher.BeginInvoke(new Action(HideToBackground));
             }
         }
 
@@ -77,14 +187,14 @@ namespace 대진포스_쿼리
             if (WebView?.CoreWebView2 == null)
             {
                 App.WriteStatus(false, "WebView2 초기화 실패", 0);
-                Application.Current.Shutdown(1);
+                ShutdownAuto(1);
                 return;
             }
 
             if (!DbSaver.IsConfigured)
             {
                 App.WriteStatus(false, "DB 연결 문자열이 설정되어 있지 않음", 0);
-                Application.Current.Shutdown(3);
+                ShutdownAuto(3);
                 return;
             }
 
@@ -642,6 +752,29 @@ namespace 대진포스_쿼리
                     new { UserId = "junco3", Password = "dines9293!!" }
                 };
 
+                // --store 모드: 매장 매핑 조회 → 해당 계정만 활성
+                string targetAccount = null;
+                if (!string.IsNullOrEmpty(App.StoreFilter))
+                {
+                    var entry = StoreMappingService.Find(App.StoreFilter);
+                    if (entry != null && !string.IsNullOrEmpty(entry.AccountId))
+                    {
+                        targetAccount = entry.AccountId;
+                        StatusText.Text = $"🎯 단일 매장 모드 — '{App.StoreFilter}' (계정: {targetAccount})";
+                    }
+                    else
+                    {
+                        StatusText.Text = $"⚠️ 매장 '{App.StoreFilter}' 매핑이 없습니다. 전체 수집을 한 번 실행하세요.";
+                        if (App.AutoMode)
+                        {
+                            App.WriteStatus(false, $"매장 '{App.StoreFilter}' 매핑 없음 — 전체 수집 선행 필요", 0);
+                            await Task.Delay(800);
+                            ShutdownAuto(6);
+                            return;
+                        }
+                    }
+                }
+
                 // 진행바 초기화
                 ProgressBar.Value = 0;
                 ProgressText.Text = "0%";
@@ -667,6 +800,17 @@ namespace 대진포스_쿼리
                     var acctProgress = acctIndex == 0 ? Account1ProgressBar  : Account2ProgressBar;
                     var acctProgTxt  = acctIndex == 0 ? Account1ProgressText : Account2ProgressText;
 
+                    // 단일 매장 모드: 매핑된 계정이 아니면 스킵
+                    if (targetAccount != null &&
+                        !string.Equals(userId, targetAccount, StringComparison.OrdinalIgnoreCase))
+                    {
+                        acctStatus.Text    = "⏭️ 스킵 (단일 매장 모드)";
+                        acctDetail.Text    = "";
+                        acctProgress.Value = 100;
+                        acctProgTxt.Text   = "스킵";
+                        return;
+                    }
+
                     acctStatus.Text    = "시작 중...";
                     acctDetail.Text    = "";
                     acctProgress.Value = 0;
@@ -676,11 +820,39 @@ namespace 대진포스_쿼리
                     {
                         await LoginWithAccount(wv, userId, password,
                             onStatus: s => acctStatus.Text = s);
-                        await AutoNavigateSetDateAndCollect(wv, currentDateStr, currentDateStr, userId, false, currentDate, outList,
+
+                        // ⚡ 빠른 경로: HTTP API 직접 호출 (10~30배 빠름)
+                        string filter = string.IsNullOrEmpty(App.StoreFilter) ? null : App.StoreFilter;
+                        bool fastOk = await CollectAccountFastAsync(
+                            wv, userId, currentDate, outList,
+                            targetStoreName: filter,
                             onStatus:       s => acctStatus.Text = s,
-                            onDetail:       d => acctDetail.Text = d,
-                            onProgress:     p => { acctProgress.Value = p; acctProgTxt.Text = $"{p:F1}%"; },
+                            onProgress:     p => acctProgress.Value = p,
                             onProgressText: t => acctProgTxt.Text = t);
+
+                        if (!fastOk)
+                        {
+                            // 폴백: 기존 클릭 기반 수집
+                            acctStatus.Text = "↩️ 빠른 경로 실패 — 기존 방식으로 재시도";
+                            await AutoNavigateSetDateAndCollect(wv, currentDateStr, currentDateStr, userId, false, currentDate, outList,
+                                onStatus:       s => acctStatus.Text = s,
+                                onDetail:       d => acctDetail.Text = d,
+                                onProgress:     p => { acctProgress.Value = p; acctProgTxt.Text = $"{p:F1}%"; },
+                                onProgressText: t => acctProgTxt.Text = t,
+                                targetStoreName: filter);
+
+                            // 폴백 경로: 매핑 학습 (기존 로직)
+                            try
+                            {
+                                var stores = StoreMappingService.ExtractStoreNamesFromAccountData(outList);
+                                StoreMappingService.UpdateFromAccount(userId, currentDate, stores);
+                            }
+                            catch (Exception mapEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[매핑 학습 실패] {userId}: {mapEx.Message}");
+                            }
+                        }
+
                         acctStatus.Text = $"✅ 완료 ({outList.Count}개 매장)";
                     }
                     catch (Exception ex)
@@ -702,8 +874,8 @@ namespace 대진포스_쿼리
 
                 DetailText.Text = $"{currentDate:yyyy-MM-dd} | junco:{list1.Count} + junco3:{list2.Count}개 매장 수집 완료";
 
-                // 파일 저장
-                SaveAllAccountsDataWithDate(currentDateStr, currentDate);
+                // 파일 저장 (CSV + DB, 백그라운드)
+                await SaveAllAccountsDataWithDate(currentDateStr, currentDate);
 
                 ProgressBar.Value = 100;
                 ProgressText.Text = "100%";
@@ -719,9 +891,22 @@ namespace 대진포스_쿼리
                 if (App.AutoMode)
                 {
                     int totalRows = _allAccountsData.Sum(s => s?.Count ?? 0);
-                    App.WriteStatus(true, $"수집 완료 ({_allAccountsData.Count}개 매장, {totalRows}행)", totalRows);
-                    await Task.Delay(800);
-                    Application.Current.Shutdown(0);
+                    if (totalRows > 0)
+                    {
+                        App.WriteStatus(true, $"수집 완료 ({_allAccountsData.Count}개 매장, {totalRows}행)", totalRows);
+                        await Task.Delay(800);
+                        ShutdownAuto(0);
+                    }
+                    else
+                    {
+                        // 단일 매장 모드에서 사유가 설정되어 있으면 그걸 회신, 아니면 일반 메시지
+                        var reason = !string.IsNullOrEmpty(_autoModeFailReason)
+                            ? _autoModeFailReason
+                            : "수집된 데이터 없음 (로그인/스크래핑 실패 가능성)";
+                        App.WriteStatus(false, reason, 0);
+                        await Task.Delay(500);
+                        ShutdownAuto(7);
+                    }
                     return;
                 }
             }
@@ -734,7 +919,7 @@ namespace 대진포스_쿼리
                 {
                     App.WriteStatus(false, $"오류: {ex.Message}", 0);
                     await Task.Delay(500);
-                    Application.Current.Shutdown(2);
+                    ShutdownAuto(2);
                     return;
                 }
 
@@ -867,8 +1052,133 @@ namespace 대진포스_쿼리
             }
         }
 
+        // ── 빠른 수집 경로: WebView2 로그인 직후 쿠키만 추출하여 HTTP로 직접 호출 ─────────
+        // 매장 목록(Sch01) 1회 + 매장별 상세(Sch02) 병렬 호출. 클릭/렌더링 없음 → 10~30배 빠름.
+        // 성공 시 outList에 매장별 TSV 행 묶음을 추가하고 true 반환.
+        private async Task<bool> CollectAccountFastAsync(
+            Microsoft.Web.WebView2.Wpf.WebView2 webView,
+            string accountId,
+            DateTime targetDate,
+            List<List<string>> outList,
+            string targetStoreName = null,
+            Action<string> onStatus = null,
+            Action<double> onProgress = null,
+            Action<string> onProgressText = null)
+        {
+            void SetS(string t) { StatusText.Text = t; onStatus?.Invoke(t); }
+            void SetP(double v) { onProgress?.Invoke(v); }
+            void SetPT(string t) { onProgressText?.Invoke(t); }
+
+            try
+            {
+                // 1) WebView2에서 topint 쿠키 추출
+                var rawCookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync("https://asp.topint.co.kr");
+                if (rawCookies == null || rawCookies.Count == 0)
+                {
+                    LogDebug($"[FAST] {accountId}: 쿠키 추출 실패 — 로그인 실패 가능성");
+                    return false;
+                }
+
+                var tuples = new List<(string, string, string, string)>();
+                foreach (var c in rawCookies)
+                {
+                    tuples.Add((c.Name, c.Value, c.Domain, c.Path));
+                }
+
+                using (var api = new TopintApiClient(tuples))
+                {
+                    SetS($"⚡ [{accountId}] 매장 목록 조회...");
+                    string sch01Json;
+                    try
+                    {
+                        sch01Json = await api.FetchStoreListJsonAsync(targetDate, targetDate);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebug($"[FAST] {accountId} Sch01 실패: {ex.Message}");
+                        return false;
+                    }
+
+                    var stores = TopintApiClient.ParseStoreList(sch01Json);
+                    LogDebug($"[FAST] {accountId}: 매장 {stores.Count}개 수신");
+                    if (stores.Count == 0) return false;
+
+                    // 단일 매장 모드: 매장명으로 필터
+                    if (!string.IsNullOrEmpty(targetStoreName))
+                    {
+                        var hit = stores.Find(s =>
+                            string.Equals(s.BranchName, targetStoreName, StringComparison.OrdinalIgnoreCase));
+                        if (hit == null)
+                        {
+                            _autoModeFailReason = $"[FAST] 매장 '{targetStoreName}' 목록에 없음";
+                            return false;
+                        }
+                        stores = new List<StoreInfo> { hit };
+                    }
+
+                    // 매핑 자동 학습: storeName → accountId (rowIndex는 의미 없음, 0으로 통일)
+                    try
+                    {
+                        var names = stores.Select(s => s.BranchName).ToList();
+                        StoreMappingService.UpdateFromAccount(accountId, targetDate, names);
+                    }
+                    catch (Exception mapEx) { LogDebug($"[FAST] 매핑 갱신 실패: {mapEx.Message}"); }
+
+                    // 2) Sch02 병렬 호출 (동시성 10)
+                    SetS($"⚡ [{accountId}] 매장 상세 병렬 수집 ({stores.Count}개)...");
+                    using (var gate = new System.Threading.SemaphoreSlim(10))
+                    {
+                        int done = 0;
+                        var tasks = new List<Task<(StoreInfo s, List<string> tsv)>>();
+                        foreach (var store in stores)
+                        {
+                            var s = store;
+                            tasks.Add(Task.Run(async () =>
+                            {
+                                await gate.WaitAsync();
+                                try
+                                {
+                                    string json = await api.FetchStoreDetailJsonAsync(s.Branch, targetDate, targetDate);
+                                    var lines = TopintApiClient.ParseStoreDetailToTsv(json, s.BranchName);
+                                    return (s, lines);
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogDebug($"[FAST] {s.BranchName}({s.Branch}) Sch02 실패: {ex.Message}");
+                                    return (s, new List<string>());
+                                }
+                                finally
+                                {
+                                    gate.Release();
+                                    int n = System.Threading.Interlocked.Increment(ref done);
+                                    double pct = (double)n / stores.Count * 100.0;
+                                    await Dispatcher.InvokeAsync(() => { SetP(pct); SetPT($"{pct:F0}%"); });
+                                }
+                            }));
+                        }
+
+                        var results = await Task.WhenAll(tasks);
+                        foreach (var (s, lines) in results)
+                        {
+                            if (lines == null || lines.Count == 0) continue;
+                            outList.Add(lines);
+                        }
+                    }
+
+                    LogDebug($"[FAST] {accountId}: 완료 ({outList.Count}개 매장)");
+                    SetS($"⚡ [{accountId}] 빠른 수집 완료 ({outList.Count}개 매장)");
+                    return outList.Count > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"[FAST] {accountId} 예외: {ex.Message}");
+                return false;
+            }
+        }
+
         // 메뉴 이동 + 날짜 설정 + 자동 수집
-        private async Task AutoNavigateSetDateAndCollect(Microsoft.Web.WebView2.Wpf.WebView2 webView, string startDateStr, string endDateStr, string accountId = null, bool showMessage = true, DateTime? targetDate = null, List<List<string>> localList = null, Action<string> onStatus = null, Action<string> onDetail = null, Action<double> onProgress = null, Action<string> onProgressText = null)
+        private async Task AutoNavigateSetDateAndCollect(Microsoft.Web.WebView2.Wpf.WebView2 webView, string startDateStr, string endDateStr, string accountId = null, bool showMessage = true, DateTime? targetDate = null, List<List<string>> localList = null, Action<string> onStatus = null, Action<string> onDetail = null, Action<double> onProgress = null, Action<string> onProgressText = null, string targetStoreName = null)
         {
             void SetS(string t) { StatusText.Text = t; onStatus?.Invoke(t); }
             try
@@ -876,7 +1186,7 @@ namespace 대진포스_쿼리
                 SetS("📋 메뉴별 매출현황으로 이동 중...");
                 await Task.Delay(2000);
 
-                // 메뉴 클릭
+                // 메뉴 클릭 — 링크가 로드될 때까지 최대 5회 재시도
                 string clickMenuScript = @"
                     (function() {
                         var links = document.querySelectorAll('a');
@@ -890,12 +1200,27 @@ namespace 대진포스_쿼리
                     })()
                 ";
 
-                string menuResult = await webView.CoreWebView2.ExecuteScriptAsync(clickMenuScript);
-                menuResult = menuResult.Trim('"');
+                string menuResult = "not_found";
+                for (int menuAttempt = 0; menuAttempt < 2; menuAttempt++)
+                {
+                    menuResult = await webView.CoreWebView2.ExecuteScriptAsync(clickMenuScript);
+                    menuResult = (menuResult ?? string.Empty).Trim('"');
+                    if (menuResult == "success") break;
+                    SetS($"📋 메뉴 검색 재시도... ({menuAttempt + 1}/2)");
+                    await Task.Delay(1500);
+                }
 
                 if (menuResult != "success")
                 {
                     SetS("❌ 메뉴를 찾을 수 없습니다");
+                    _autoModeFailReason = "매장매출현황 진입 실패: '메뉴별 매출현황' 링크를 찾을 수 없음 (로그인 직후 페이지 로드 미완료 가능성)";
+                    if (App.AutoMode)
+                    {
+                        App.WriteStatus(false, _autoModeFailReason, 0);
+                        await Task.Delay(300);
+                        ShutdownAuto(8);
+                        return;
+                    }
                     MessageBox.Show("'메뉴별 매출현황' 메뉴를 찾을 수 없습니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
@@ -956,13 +1281,29 @@ namespace 대진포스_쿼리
                     }})()
                 ";
 
-                string dateResult = await webView.CoreWebView2.ExecuteScriptAsync(setDateScript);
-                dateResult = System.Text.RegularExpressions.Regex.Unescape(dateResult);
-                dateResult = dateResult.Trim('"');
+                // 날짜 입력 필드도 iframe이 늦게 로드되는 경우가 있어 재시도
+                string dateResult = string.Empty;
+                for (int dateAttempt = 0; dateAttempt < 2; dateAttempt++)
+                {
+                    dateResult = await webView.CoreWebView2.ExecuteScriptAsync(setDateScript);
+                    dateResult = System.Text.RegularExpressions.Regex.Unescape(dateResult ?? string.Empty);
+                    dateResult = dateResult.Trim('"');
+                    if (dateResult.Contains("\"success\":true")) break;
+                    SetS($"📆 날짜 입력 필드 대기... ({dateAttempt + 1}/2)");
+                    await Task.Delay(1500);
+                }
 
                 if (!dateResult.Contains("\"success\":true"))
                 {
                     SetS("❌ 날짜 설정 실패");
+                    _autoModeFailReason = "매장매출현황 진입 실패: 날짜 입력 필드를 찾을 수 없음 (iframe 미로드)";
+                    if (App.AutoMode)
+                    {
+                        App.WriteStatus(false, _autoModeFailReason, 0);
+                        await Task.Delay(300);
+                        ShutdownAuto(8);
+                        return;
+                    }
                     MessageBox.Show("날짜 입력 필드를 찾을 수 없습니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
@@ -1000,12 +1341,27 @@ namespace 대진포스_쿼리
                     })()
                 ";
 
-                string searchResult = await webView.CoreWebView2.ExecuteScriptAsync(clickSearchScript);
-                searchResult = searchResult.Trim('"');
+                string searchResult = "not_found";
+                for (int searchAttempt = 0; searchAttempt < 2; searchAttempt++)
+                {
+                    searchResult = await webView.CoreWebView2.ExecuteScriptAsync(clickSearchScript);
+                    searchResult = (searchResult ?? string.Empty).Trim('"');
+                    if (searchResult == "clicked") break;
+                    SetS($"🔍 검색 버튼 대기... ({searchAttempt + 1}/2)");
+                    await Task.Delay(1000);
+                }
 
                 if (searchResult != "clicked")
                 {
                     SetS("❌ 검색 버튼을 찾을 수 없습니다");
+                    _autoModeFailReason = "매장매출현황 진입 실패: 검색(btnSearch) 버튼을 찾을 수 없음";
+                    if (App.AutoMode)
+                    {
+                        App.WriteStatus(false, _autoModeFailReason, 0);
+                        await Task.Delay(300);
+                        ShutdownAuto(8);
+                        return;
+                    }
                     MessageBox.Show("검색 버튼을 찾을 수 없습니다.", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
@@ -1152,6 +1508,14 @@ namespace 대진포스_쿼리
                 if (!dataLoaded)
                 {
                     SetS("⚠️ 데이터 로드 시간 초과");
+                    _autoModeFailReason = "초기 데이터 로드 타임아웃 — 서버 응답 지연 또는 빈 결과";
+                    if (App.AutoMode)
+                    {
+                        App.WriteStatus(false, _autoModeFailReason, 0);
+                        await Task.Delay(300);
+                        ShutdownAuto(8);
+                        return;
+                    }
                     MessageBox.Show("데이터 로드 시간이 초과되었습니다.\n수동으로 확인해주세요.", "경고", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -1162,7 +1526,7 @@ namespace 대진포스_쿼리
 
                 // 자동 수집 시작
                 SetS("🤖 자동 수집 시작...");
-                await StartAutoCollect(webView, 0, false, accountId, showMessage, targetDate, localList, onStatus, onDetail, onProgress, onProgressText);
+                await StartAutoCollect(webView, 0, false, accountId, showMessage, targetDate, localList, onStatus, onDetail, onProgress, onProgressText, targetStoreName);
             }
             catch (Exception ex)
             {
@@ -1361,7 +1725,7 @@ namespace 대진포스_쿼리
             }
         }
 
-        private async Task StartAutoCollect(Microsoft.Web.WebView2.Wpf.WebView2 webView, int maxCount, bool isTestMode, string accountId = null, bool showMessage = true, DateTime? targetDate = null, List<List<string>> localList = null, Action<string> onStatus = null, Action<string> onDetail = null, Action<double> onProgress = null, Action<string> onProgressText = null)
+        private async Task StartAutoCollect(Microsoft.Web.WebView2.Wpf.WebView2 webView, int maxCount, bool isTestMode, string accountId = null, bool showMessage = true, DateTime? targetDate = null, List<List<string>> localList = null, Action<string> onStatus = null, Action<string> onDetail = null, Action<double> onProgress = null, Action<string> onProgressText = null, string targetStoreName = null)
         {
             // localList가 제공되면 그것을 사용 (병렬 실행 시), 아니면 공유 _collectedData 사용
             var activeData = localList ?? _collectedData;
@@ -1500,7 +1864,9 @@ namespace 대진포스_쿼리
                 if (totalIframes == 0)
                 {
                     LogDebug("❌ iframe을 찾을 수 없음");
-                    MessageBox.Show("iframe을 찾을 수 없습니다.\n\niframe이 있는 페이지로 이동해주세요.");
+                    _autoModeFailReason = "매장매출현황 진입 실패: iframe 없음";
+                    if (!App.AutoMode)
+                        MessageBox.Show("iframe을 찾을 수 없습니다.\n\niframe이 있는 페이지로 이동해주세요.");
                     ResetAutoCollectUI();
                     return;
                 }
@@ -1514,7 +1880,9 @@ namespace 대진포스_쿼리
                 if (rowCount == 0)
                 {
                     LogDebug("❌ 매장 목록(위 표)을 찾을 수 없음");
-                    MessageBox.Show("iframe 내부에 매장 목록(위 표)을 찾을 수 없습니다.\n\n매장 목록이 있는 페이지로 이동해주세요.");
+                    _autoModeFailReason = "매장 목록(jqGrid01) 비어있음 — 검색 결과 없음 또는 페이지 미진입";
+                    if (!App.AutoMode)
+                        MessageBox.Show("iframe 내부에 매장 목록(위 표)을 찾을 수 없습니다.\n\n매장 목록이 있는 페이지로 이동해주세요.");
                     ResetAutoCollectUI();
                     return;
                 }
@@ -1525,7 +1893,61 @@ namespace 대진포스_쿼리
 
                 LogDebug($"수집 시작: actualCount={actualCount}, rowCount={rowCount}, maxCount={maxCount}");
 
-                if (isTestMode && actualCount < rowCount)
+                // 단일 매장 모드: 매장명으로 윗표에서 행을 찾아 그 행 하나만 처리
+                int startIdx = 1;
+                int endIdx = actualCount;
+                if (!string.IsNullOrEmpty(targetStoreName))
+                {
+                    // 매장명 매칭 (cells[2] 기준) — 행 인덱스에 의존하지 않음
+                    string safeName = targetStoreName.Replace("\\", "\\\\").Replace("'", "\\'");
+                    string findStoreScript = $@"
+                        (function() {{
+                            var iframes = document.querySelectorAll('iframe');
+                            for (var i = 0; i < iframes.length; i++) {{
+                                try {{
+                                    var iframe = iframes[i];
+                                    var rect = iframe.getBoundingClientRect();
+                                    if (rect.width > 0 && rect.height > 0) {{
+                                        var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                                        if (iframeDoc && iframeDoc.body) {{
+                                            var allTables = iframeDoc.querySelectorAll('table[id*=jqGrid]');
+                                            if (allTables.length > 0) {{
+                                                var rows = allTables[0].querySelectorAll('tbody tr[role=row]');
+                                                for (var j = 1; j < rows.length; j++) {{
+                                                    var cells = rows[j].querySelectorAll('td');
+                                                    if (cells.length > 2) {{
+                                                        var name = cells[2].textContent.trim();
+                                                        if (name === '{safeName}') {{
+                                                            return j;
+                                                        }}
+                                                    }}
+                                                }}
+                                            }}
+                                        }}
+                                    }}
+                                }} catch (e) {{}}
+                            }}
+                            return -1;
+                        }})();
+                    ";
+
+                    string findStr = await webView.CoreWebView2.ExecuteScriptAsync(findStoreScript);
+                    int.TryParse(findStr.Trim('"'), out int foundIdx);
+                    LogDebug($"🎯 단일 매장 모드 '{targetStoreName}': 행 인덱스 = {foundIdx}");
+
+                    if (foundIdx < 0)
+                    {
+                        _autoModeFailReason = $"매장 '{targetStoreName}' 윗표에서 찾을 수 없음 — 전체 수집으로 매핑을 갱신하세요";
+                        SetS($"❌ {_autoModeFailReason}");
+                        ResetAutoCollectUI();
+                        return;
+                    }
+
+                    startIdx = foundIdx;
+                    endIdx = foundIdx;
+                    SetS($"🎯 단일 매장 모드: '{targetStoreName}' (행 {foundIdx})");
+                }
+                else if (isTestMode && actualCount < rowCount)
                 {
                     SetS($"🧪 테스트 수집 중... (전체 {rowCount}개 중 {actualCount}개만 수집)");
                 }
@@ -1536,8 +1958,8 @@ namespace 대진포스_쿼리
 
                 // 각 매장 행을 순차적으로 클릭하고 판매 내역 수집
                 // 첫 번째 행(인덱스 0)은 헤더이므로 1번부터 시작
-                LogDebug($"매장 반복문 시작: i=1 to {actualCount}");
-                for (int i = 1; i <= actualCount; i++)
+                LogDebug($"매장 반복문 시작: i={startIdx} to {endIdx}");
+                for (int i = startIdx; i <= endIdx; i++)
                 {
                     if (!_isAutoCollecting)
                     {
@@ -1651,6 +2073,8 @@ namespace 대진포스_쿼리
 
                     if (clickResult.Contains("failed"))
                     {
+                        if (!string.IsNullOrEmpty(targetStoreName))
+                            _autoModeFailReason = $"매장 '{targetStoreName}' 행 클릭 실패 (DOM 변경 가능성)";
                         continue; // 실패한 행은 건너뛰기
                     }
 
@@ -1660,7 +2084,7 @@ namespace 대진포스_쿼리
 
                     bool storeDataLoaded = false;
                     int storeRowCount = 0;
-                    int maxRetries = 3; // 최대 재시도 횟수
+                    int maxRetries = 3; // 매장 반응 없을 시 최대 3회 재클릭 (사용자 설정: 1회 5초 → 3회 2초)
 
                     for (int retryCount = 0; retryCount < maxRetries && !storeDataLoaded; retryCount++)
                     {
@@ -1679,57 +2103,106 @@ namespace 대진포스_쿼리
                             await Task.Delay(300);
                         }
 
-                        // 데이터 로드를 폴링으로 감지
-                        int maxAttempts = 40; // 재시도마다 대기 시간 단축 (100회 → 40회, 약 12초)
+                        // 데이터 로드 폴링: 시도당 약 2초 (7회 × 300ms) — 사용자 설정: 1회 5초 → 3회 2초
+                        int maxAttempts = 7;
                         int stableCheckCount = 0;
                         int requiredStableChecks = 1;
+
+                        // 매장명을 JS 문자열로 안전하게 임베드
+                        string safeStoreNameForJs = (storeName ?? string.Empty)
+                            .Replace("\\", "\\\\").Replace("'", "\\'");
+
+                        // 검증 스크립트: jqGrid02 행 개수 + Sch01(이 매장의 금액)과 Sch02 footer 합계 일치 확인
+                        // 일치하면 그 매장 단독 데이터가 도착한 상태, 일치하지 않으면 아직 전체 합계 상태
+                        string checkDataScript = $@"
+                            (function() {{
+                                var iframes = document.querySelectorAll('iframe');
+                                for (var i = 0; i < iframes.length; i++) {{
+                                    try {{
+                                        var iframe = iframes[i];
+                                        var rect = iframe.getBoundingClientRect();
+                                        if (rect.width > 0 && rect.height > 0) {{
+                                            var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                                            if (!iframeDoc || !iframeDoc.body) continue;
+
+                                            var grid02 = iframeDoc.getElementById('jqGrid02');
+                                            if (!grid02) continue;
+
+                                            var rows02 = grid02.querySelectorAll('tbody tr[role=""row""]');
+                                            var dataRowCount = 0;
+                                            for (var j = 0; j < rows02.length; j++) {{
+                                                var cells = rows02[j].querySelectorAll('td');
+                                                for (var k = 0; k < cells.length; k++) {{
+                                                    if (cells[k].textContent.trim().length > 0) {{
+                                                        dataRowCount++;
+                                                        break;
+                                                    }}
+                                                }}
+                                            }}
+
+                                            var $win = iframeDoc.defaultView;
+                                            var sch02Total = 0, sch01Amt = 0;
+                                            try {{
+                                                if ($win && $win.jQuery) {{
+                                                    var $g2 = $win.jQuery('#jqGrid02');
+                                                    if ($g2.length) {{
+                                                        var footer = $g2.jqGrid('footerData', 'get');
+                                                        if (footer) {{
+                                                            var v = footer.tamount || footer.salesamt || '0';
+                                                            sch02Total = parseFloat(String(v).replace(/,/g, '')) || 0;
+                                                        }}
+                                                    }}
+                                                    var $g1 = $win.jQuery('#jqGrid01');
+                                                    if ($g1.length) {{
+                                                        var ids = $g1.jqGrid('getDataIDs');
+                                                        for (var k = 0; k < ids.length; k++) {{
+                                                            var rd = $g1.jqGrid('getRowData', ids[k]);
+                                                            var nm = (rd.branch2 || '').trim();
+                                                            if (nm === '{safeStoreNameForJs}') {{
+                                                                var v = rd.tamount || rd.salesamt || '0';
+                                                                sch01Amt = parseFloat(String(v).replace(/,/g, '')) || 0;
+                                                                break;
+                                                            }}
+                                                        }}
+                                                    }}
+                                                }}
+                                            }} catch (e) {{}}
+
+                                            var maxv = Math.max(sch01Amt, sch02Total);
+                                            // 두 값이 모두 양수이고 1% 이내로 일치하면 단일 매장 데이터로 판단.
+                                            // 금액 비교 불가(jQuery 미존재 등)인 경우 rowCount만으로 판정 (sch01Amt==0).
+                                            var match = (sch01Amt === 0) ||
+                                                        (sch01Amt > 0 && sch02Total > 0 &&
+                                                         Math.abs(sch01Amt - sch02Total) / maxv < 0.01);
+
+                                            return JSON.stringify({{
+                                                rowCount: dataRowCount,
+                                                sch01Amt: sch01Amt,
+                                                sch02Total: sch02Total,
+                                                match: match
+                                            }});
+                                        }}
+                                    }} catch (e) {{}}
+                                }}
+                                return JSON.stringify({{rowCount: 0, sch01Amt: 0, sch02Total: 0, match: false}});
+                            }})();
+                        ";
 
                         for (int attempt = 0; attempt < maxAttempts; attempt++)
                         {
                             await Task.Delay(300);
 
-                            string checkDataScript = @"
-                                (function() {
-                                    var iframes = document.querySelectorAll('iframe');
-                                    for (var i = 0; i < iframes.length; i++) {
-                                        try {
-                                            var iframe = iframes[i];
-                                            var rect = iframe.getBoundingClientRect();
-                                            if (rect.width > 0 && rect.height > 0) {
-                                                var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                                                if (iframeDoc && iframeDoc.body) {
-                                                    var grid = iframeDoc.getElementById('jqGrid02');
-                                                    if (grid) {
-                                                        var rows = grid.querySelectorAll('tbody tr[role=""row""]');
-                                                        var dataRowCount = 0;
+                            string rawResult = await webView.CoreWebView2.ExecuteScriptAsync(checkDataScript);
+                            rawResult = System.Text.RegularExpressions.Regex.Unescape(rawResult ?? string.Empty).Trim('"');
 
-                                                        for (var j = 0; j < rows.length; j++) {
-                                                            var cells = rows[j].querySelectorAll('td');
-                                                            for (var k = 0; k < cells.length; k++) {
-                                                                if (cells[k].textContent.trim().length > 0) {
-                                                                    dataRowCount++;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-
-                                                        return dataRowCount;
-                                                    }
-                                                }
-                                            }
-                                        } catch (e) {}
-                                    }
-                                    return 0;
-                                })();
-                            ";
-
-                            string rowCountStr = await webView.CoreWebView2.ExecuteScriptAsync(checkDataScript);
                             int currentRowCount = 0;
-                            int.TryParse(rowCountStr.Trim('"'), out currentRowCount);
+                            var rcMatch = System.Text.RegularExpressions.Regex.Match(rawResult, @"""rowCount""\s*:\s*(\d+)");
+                            if (rcMatch.Success) int.TryParse(rcMatch.Groups[1].Value, out currentRowCount);
+                            bool amtMatch = rawResult.Contains("\"match\":true");
 
-                            LogDebug($"재시도 {retryCount + 1}, 시도 #{attempt + 1}: {currentRowCount}행 감지");
+                            LogDebug($"재시도 {retryCount + 1}, 시도 #{attempt + 1}: {currentRowCount}행, 금액일치={amtMatch}");
 
-                            if (currentRowCount > 1)
+                            if (currentRowCount > 1 && amtMatch)
                             {
                                 stableCheckCount++;
                                 storeRowCount = currentRowCount;
@@ -1745,7 +2218,7 @@ namespace 대진포스_쿼리
                             {
                                 if (stableCheckCount > 0)
                                 {
-                                    LogDebug($"⚠️ 데이터 불안정 - 카운터 리셋");
+                                    LogDebug($"⚠️ 데이터 불안정/금액 불일치 - 카운터 리셋");
                                 }
                                 stableCheckCount = 0;
                             }
@@ -1753,7 +2226,8 @@ namespace 대진포스_쿼리
                             // 진행 상황 표시
                             if ((attempt + 1) % 4 == 0)
                             {
-                                SetS($"⏳ 매장 {i} ({storeName}) 로딩 중... (재시도 {retryCount + 1}/{maxRetries}, {attempt + 1}/{maxAttempts})");
+                                string suffix = amtMatch ? "" : " (전체 합계 상태)";
+                                SetS($"⏳ 매장 {i} ({storeName}) 로딩 중...{suffix} (재시도 {retryCount + 1}/{maxRetries}, {attempt + 1}/{maxAttempts})");
                             }
                         }
 
@@ -1778,6 +2252,10 @@ namespace 대진포스_쿼리
                         LogDebug($"❌ 매장 #{i} ({storeName}): 데이터 로드 실패 (재시도 {maxRetries}회)");
                         System.Diagnostics.Debug.WriteLine($"⚠️ 매장 {i} ({storeName}): 데이터 로드 실패 - 건너뜀");
                         SetS($"❌ 매장 {i} ({storeName}) 데이터 로드 실패 - 건너뜀");
+
+                        if (!string.IsNullOrEmpty(targetStoreName))
+                            _autoModeFailReason = $"매장 '{storeName}' 클릭 후 아래표 데이터 로딩 타임아웃 (재시도 {maxRetries}회)";
+
                         await Task.Delay(500);
                         continue;
                     }
@@ -2372,7 +2850,7 @@ namespace 대진포스_쿼리
         /// <summary>
         /// 특정 날짜의 모든 계정 데이터를 CSV로 저장 (날짜 열 포함)
         /// </summary>
-        private void SaveAllAccountsDataWithDate(string dateStr, DateTime targetDate)
+        private async Task SaveAllAccountsDataWithDate(string dateStr, DateTime targetDate)
         {
             try
             {
@@ -2381,8 +2859,11 @@ namespace 대진포스_쿼리
                     if (App.AutoMode)
                     {
                         StatusText.Text = $"⚠️ {targetDate:yyyy-MM-dd} 수집된 데이터 없음";
-                        App.WriteStatus(false, "수집된 데이터 없음 (로그인/스크래핑 실패 가능성)", 0);
-                        Application.Current.Shutdown(4);
+                        var noDataReason = !string.IsNullOrEmpty(_autoModeFailReason)
+                            ? _autoModeFailReason
+                            : "수집된 데이터 없음 (로그인/스크래핑 실패 가능성)";
+                        App.WriteStatus(false, noDataReason, 0);
+                        ShutdownAuto(4);
                         return;
                     }
                     MessageBox.Show($"{targetDate:yyyy-MM-dd} 데이터가 수집되지 않았습니다.", "데이터 없음", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -2449,15 +2930,18 @@ namespace 대진포스_쿼리
                     }
                 }
 
-                // 파일 저장
-                File.WriteAllLines(filePath, allCsvData, Encoding.UTF8);
+                // 파일 저장 (백그라운드 — 수천 행이면 UI가 잠시 멈출 수 있어 별도 스레드)
+                StatusText.Text = "💾 CSV 저장 중...";
+                await Task.Run(() => File.WriteAllLines(filePath, allCsvData, Encoding.UTF8));
 
-                // DB 저장
+                // DB 저장 (백그라운드 — 수천 행 MERGE는 동기 실행 시 응답없음 유발)
                 int dbRows = 0;
                 string dbMessage = "";
+                var dataSnapshot = _allAccountsData;
+                StatusText.Text = $"💾 DB 저장 중... ({dataSnapshot.Sum(s => s?.Count ?? 0)}행)";
                 try
                 {
-                    dbRows = DbSaver.Save(_allAccountsData, targetDate);
+                    dbRows = await Task.Run(() => DbSaver.Save(dataSnapshot, targetDate));
                     dbMessage = $" | 💾 DB: {dbRows}행";
                 }
                 catch (Exception dbEx)

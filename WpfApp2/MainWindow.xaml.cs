@@ -42,6 +42,7 @@ namespace WpfApp2
 
         private DispatcherTimer leaveTimer;
         private DispatcherTimer _serverCheckTimer;
+        private DispatcherTimer? _posStatusHideTimer;
 
         private readonly Random _rand = new Random(); // Random 인스턴스는 readonly로 선언
 
@@ -50,6 +51,9 @@ namespace WpfApp2
 
         // 단축키로 열었는지 추적하는 플래그 (마우스가 한 번 들어올 때까지 LogoWindow 전환 방지)
         private bool _openedByHotkey = false;
+
+        // 차트 날짜 선택 팝업이 열려 있을 때는 마우스가 팝업으로 빠져도 LogoWindow로 전환하지 않음
+        private int _chartDatePickerPopupOpenCount = 0;
 
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
@@ -248,6 +252,16 @@ namespace WpfApp2
             _gridCheckTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
             _gridCheckTimer.Tick += GridCheckTimer_Tick;
             _gridCheckTimer.Start();
+
+            // 창이 비활성화되면 즉시 그리드 숨기기 (다른 프로그램이 활성 상태일 때 격자 안 보이게)
+            Deactivated += (_, __) =>
+            {
+                if (_isGridVisible)
+                {
+                    HideGridLines();
+                    _isGridVisible = false;
+                }
+            };
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -376,6 +390,10 @@ namespace WpfApp2
             if (_openedByHotkey)
                 return;
 
+            // 차트 날짜 선택 팝업이 열려 있으면 LogoWindow 전환 금지
+            if (_chartDatePickerPopupOpenCount > 0)
+                return;
+
             // 마우스가 소유 자식 창 위에 있으면 무시 (스크린 좌표로 검증)
             {
                 var mousePos = System.Windows.Forms.Control.MousePosition;
@@ -408,6 +426,10 @@ namespace WpfApp2
 
             // 단축키로 열었고 아직 마우스가 한 번도 안 들어온 경우 무시
             if (_openedByHotkey)
+                return;
+
+            // 차트 날짜 선택 팝업이 열려 있으면 LogoWindow 전환 금지 (날짜선택란까지 본 창의 일부로 취급)
+            if (_chartDatePickerPopupOpenCount > 0)
                 return;
 
             // 마우스가 여전히 MainWindow 또는 소유 자식창 위에 있으면 아무것도 하지 않음
@@ -514,20 +536,55 @@ namespace WpfApp2
             _ = DaejinPosService.RunAsync();
         }
 
+        // 누락목록 오버레이 표시 / 백드롭 클릭 시 닫기 / 컨트롤 내부 X 버튼으로 닫기
+        public void ShowPosQuery()
+        {
+            PosQueryOverlay.Visibility = Visibility.Visible;
+            PosQueryPanel.RequestClose -= PosQueryPanel_RequestClose;
+            PosQueryPanel.RequestClose += PosQueryPanel_RequestClose;
+            _ = PosQueryPanel.RefreshAsync();
+            Activate();
+        }
+
+        private void PosQueryPanel_RequestClose(object? sender, EventArgs e)
+        {
+            PosQueryOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private void PosQueryOverlay_BackdropClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            // 백드롭(어두운 영역) 직접 클릭 시에만 닫고, 자식 컨트롤 클릭은 무시
+            if (e.OriginalSource == PosQueryOverlay)
+                PosQueryOverlay.Visibility = Visibility.Collapsed;
+        }
+
         private void OnPosStatusChanged(string status)
         {
             Dispatcher.Invoke(() =>
             {
+                // 이전 자동 숨김 타이머는 항상 정지
+                _posStatusHideTimer?.Stop();
+
                 if (!string.IsNullOrEmpty(status))
                 {
-                    // 진행 중 — 주황색
+                    // 진행 중 — 주황색 (작업이 끝날 때까지 계속 표시)
                     PosStatusText.Text = status;
                     PosStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                         System.Windows.Media.Color.FromRgb(0xFF, 0xB3, 0x47));
                     PosStatusText.Visibility = Visibility.Visible;
+                    if (PosShowBtn.Visibility != Visibility.Visible)
+                    {
+                        // 새 작업 시작 — 토글 상태 초기화
+                        _posWindowVisible = false;
+                        PosShowBtn.Content = "보기";
+                    }
+                    PosShowBtn.Visibility = Visibility.Visible;
                 }
                 else if (!string.IsNullOrEmpty(DaejinPosService.LastRunInfo))
                 {
+                    PosShowBtn.Visibility = Visibility.Collapsed;
+                    _posWindowVisible = false;
+                    PosShowBtn.Content = "보기";
                     var info = DaejinPosService.LastRunInfo;
                     PosStatusText.Text = info;
 
@@ -542,13 +599,112 @@ namespace WpfApp2
 
                     PosStatusText.Foreground = new System.Windows.Media.SolidColorBrush(color);
                     PosStatusText.Visibility = Visibility.Visible;
+
+                    // 완료 메시지는 3초 후 자동으로 숨김
+                    if (_posStatusHideTimer == null)
+                    {
+                        _posStatusHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                        _posStatusHideTimer.Tick += (_, __) =>
+                        {
+                            _posStatusHideTimer!.Stop();
+                            PosStatusText.Visibility = Visibility.Collapsed;
+                        };
+                    }
+                    _posStatusHideTimer.Start();
                 }
                 else
                 {
                     PosStatusText.Visibility = Visibility.Collapsed;
+                    PosShowBtn.Visibility = Visibility.Collapsed;
+                    _posWindowVisible = false;
+                    PosShowBtn.Content = "보기";
                 }
             });
         }
+
+        // 보기 ↔ 숨기기 토글. 자식 프로세스에 'DaejinPosShow_{pid}' / 'DaejinPosHide_{pid}' 이벤트 신호 전송.
+        // 자식이 자체 WPF로 좌표를 갱신하므로 WebView2가 정상 렌더링됨.
+        private bool _posWindowVisible = false;
+
+        private void PosShowBtn_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                int? pid = DaejinPosService.RunningProcessId;
+                if (!pid.HasValue || pid.Value <= 0)
+                {
+                    System.Windows.MessageBox.Show(
+                        "대진포스 쿼리가 실행 중이지 않습니다.",
+                        "안내", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                    return;
+                }
+
+                string eventName = (_posWindowVisible ? "DaejinPosHide_" : "DaejinPosShow_") + pid.Value;
+                try
+                {
+                    using (var ev = System.Threading.EventWaitHandle.OpenExisting(eventName))
+                    {
+                        ev.Set();
+                    }
+                    _posWindowVisible = !_posWindowVisible;
+                    PosShowBtn.Content = _posWindowVisible ? "숨기기" : "보기";
+                }
+                catch (System.Threading.WaitHandleCannotBeOpenedException)
+                {
+                    System.Windows.MessageBox.Show(
+                        "대진포스 쿼리가 아직 준비 중입니다. 잠시 후 다시 시도해 주세요.",
+                        "안내", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"창 표시 실패: {ex.Message}",
+                    "오류", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            }
+        }
+
+        // DaejinPosService가 추적하는 PID로 그 프로세스의 모든 top-level 창을 EnumWindows로 찾는다.
+        // MainWindowHandle은 캐시되어 0인 경우가 있고 한글 ProcessName 조회도 가끔 실패하므로 직접 열거가 가장 안전.
+        private IntPtr FindDaejinPosTopWindow()
+        {
+            int? pid = DaejinPosService.RunningProcessId;
+            if (!pid.HasValue || pid.Value <= 0) return IntPtr.Zero;
+
+            IntPtr result = IntPtr.Zero;
+            EnumWindows((hwnd, _) =>
+            {
+                if (!IsWindowVisible(hwnd)) { /* 자동모드라 invisible이지만 일단 모든 창 다 본다 */ }
+                GetWindowThreadProcessId(hwnd, out uint windowPid);
+                if (windowPid == (uint)pid.Value)
+                {
+                    // top-level인지 확인 (Owner 없는 것만)
+                    var owner = GetWindow(hwnd, GW_OWNER);
+                    if (owner == IntPtr.Zero)
+                    {
+                        result = hwnd;
+                        return false; // 첫 번째 매치에서 중단
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            return result;
+        }
+
+        // SW_SHOWNORMAL, ShowWindow, SetForegroundWindow는 본 클래스 다른 곳에 이미 선언되어 있어 재사용.
+        [DllImport("user32.dll")]
+        private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
+
+        // GetWindowThreadProcessId는 본 클래스 다른 곳에 이미 선언되어 있어 재사용.
+        private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+        private const uint GW_OWNER = 4;
 
         private void adminbtn_Click(object sender, RoutedEventArgs e)
         {
@@ -1078,10 +1234,10 @@ namespace WpfApp2
             dlg.ShowDialog();
         }
 
-        // 그리드 체크 타이머: Shift 키를 누르고 있으면 그리드 라인 표시
+        // 그리드 체크 타이머: 본 창이 활성 상태이고 Shift 키를 누르고 있을 때만 그리드 라인 표시
         private void GridCheckTimer_Tick(object? sender, EventArgs e)
         {
-            bool shiftPressed = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+            bool shiftPressed = IsActive && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
 
             if (shiftPressed && !_isGridVisible)
             {
@@ -2343,6 +2499,8 @@ namespace WpfApp2
             public string? DataPath { get; set; } // JSON/CSV 파일 경로 또는 API URL
             public List<double> StaticData { get; set; } = new List<double>();
             public List<string> Labels { get; set; } = new List<string>();
+            // DB 차트 — Labels에서 누락 매장인 인덱스 집합 (있으면 그 위치는 빨간 막대로 표시)
+            public HashSet<int> MissingIndices { get; set; } = new HashSet<int>();
             public double Width { get; set; } = 300;
             public double Height { get; set; } = 200;
             public string Title { get; set; } = "";
@@ -3308,6 +3466,33 @@ namespace WpfApp2
             return chart;
         }
 
+        // 막대 차트용: 정상/누락 값을 별도 시리즈로 분할 (누락 위치는 별도 빨간 막대)
+        private static (List<double> normal, List<double> missing, bool hasMissing) SplitMissingForBar(ChartMeta meta)
+        {
+            var missing = meta.MissingIndices ?? new HashSet<int>();
+            double maxV = 0;
+            for (int i = 0; i < meta.StaticData.Count; i++)
+                if (meta.StaticData[i] > maxV) maxV = meta.StaticData[i];
+            double markerHeight = maxV > 0 ? maxV * 0.05 : 1; // 정상 최대값의 5% 또는 최소 1
+
+            var normalList = new List<double>(meta.StaticData.Count);
+            var missingList = new List<double>(meta.StaticData.Count);
+            for (int i = 0; i < meta.StaticData.Count; i++)
+            {
+                if (missing.Contains(i))
+                {
+                    normalList.Add(0);
+                    missingList.Add(markerHeight);
+                }
+                else
+                {
+                    normalList.Add(meta.StaticData[i]);
+                    missingList.Add(0);
+                }
+            }
+            return (normalList, missingList, missing.Count > 0);
+        }
+
         private FrameworkElement CreateBarChart(ChartMeta meta)
         {
             var (_, axisLabel, gridLine) = GetChartColors();
@@ -3316,6 +3501,41 @@ namespace WpfApp2
             var labelColor = ParseChartColor(meta.ChartLabelColor, axisLabel);
             float axisSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 22f;
             float dlSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
+
+            var (normalValues, missingValues, hasMissing) = SplitMissingForBar(meta);
+
+            var seriesList = new List<ISeries>
+            {
+                new ColumnSeries<double>
+                {
+                    Values = normalValues,
+                    Fill = new LinearGradientPaint(
+                        new[] { P_Blue.WithAlpha(220), P_Teal.WithAlpha(200) },
+                        new SKPoint(0, 0), new SKPoint(0, 1)),
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = double.PositiveInfinity,
+                    DataLabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
+                    DataLabelsSize = dlSize,
+                    DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
+                    DataLabelsFormatter = p => p.Coordinate.PrimaryValue > 0 ? p.Coordinate.PrimaryValue.ToString("N0") : string.Empty
+                }
+            };
+            if (hasMissing)
+            {
+                seriesList.Add(new ColumnSeries<double>
+                {
+                    Values = missingValues,
+                    Fill = new SolidColorPaint(new SKColor(0xE6, 0x55, 0x55, 0xC8)),
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = double.PositiveInfinity,
+                    DataLabelsPaint = null
+                });
+            }
+
             var chart = new CartesianChart
             {
                 Height = naturalH,
@@ -3325,24 +3545,7 @@ namespace WpfApp2
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
                 TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = tf },
                 TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
-                Series = new ISeries[]
-                {
-                    new ColumnSeries<double>
-                    {
-                        Values = meta.StaticData,
-                        Fill = new LinearGradientPaint(
-                            new[] { P_Blue.WithAlpha(220), P_Teal.WithAlpha(200) },
-                            new SKPoint(0, 0), new SKPoint(0, 1)),
-                        Stroke = null,
-                        Rx = 3,
-                        Ry = 3,
-                        MaxBarWidth = double.PositiveInfinity,
-                        DataLabelsPaint = new SolidColorPaint(labelColor) { SKTypeface = tf },
-                        DataLabelsSize = dlSize,
-                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Top,
-                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0")
-                    }
-                },
+                Series = seriesList.ToArray(),
                 XAxes = new[]
                 {
                     new Axis
@@ -3380,6 +3583,21 @@ namespace WpfApp2
             var displayValues = meta.StaticData.AsEnumerable().Reverse().ToList();
             var displayLabels = meta.Labels.AsEnumerable().Reverse().ToList();
 
+            // 누락 인덱스도 역순으로 변환
+            var missingOriginal = meta.MissingIndices ?? new HashSet<int>();
+            int count = meta.StaticData.Count;
+            var missingReversed = new HashSet<int>(missingOriginal.Select(idx => count - 1 - idx));
+            double maxV = 0;
+            for (int i = 0; i < count; i++) if (meta.StaticData[i] > maxV) maxV = meta.StaticData[i];
+            double markerLen = maxV > 0 ? maxV * 0.05 : 1;
+            var displayNormal  = new List<double>();
+            var displayMissing = new List<double>();
+            for (int i = 0; i < displayValues.Count; i++)
+            {
+                if (missingReversed.Contains(i)) { displayNormal.Add(0); displayMissing.Add(markerLen); }
+                else { displayNormal.Add(displayValues[i]); displayMissing.Add(0); }
+            }
+
             var tf = SKTypeface.FromFamilyName(meta.ChartFont);
             var (_, axisLabelHBar, _) = GetChartColors();
             var labelColorHBar = ParseChartColor(meta.ChartLabelColor, new SKColor(240, 240, 240));
@@ -3393,6 +3611,37 @@ namespace WpfApp2
                 : null;
             double naturalH = Math.Max(200, displayValues.Count * 38 + 60);
 
+            var seriesListHBar = new List<ISeries>
+            {
+                new RowSeries<double>
+                {
+                    Values = displayNormal,
+                    Fill = barFill,
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = 40,
+                    DataLabelsPaint = labelPaint,
+                    DataLabelsSize = dlHSize,
+                    DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Start,
+                    DataLabelsTranslate = new LiveChartsCore.Drawing.LvcPoint(1.0, 0),
+                    DataLabelsFormatter = p => p.Coordinate.PrimaryValue > 0 ? p.Coordinate.PrimaryValue.ToString("N0") + "원" : string.Empty
+                }
+            };
+            if (missingReversed.Count > 0)
+            {
+                seriesListHBar.Add(new RowSeries<double>
+                {
+                    Values = displayMissing,
+                    Fill = new SolidColorPaint(new SKColor(0xE6, 0x55, 0x55, 0xC8)),
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = 40,
+                    DataLabelsPaint = null
+                });
+            }
+
             var chart = new CartesianChart
             {
                 Height = naturalH,
@@ -3402,23 +3651,7 @@ namespace WpfApp2
                 TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Auto,
                 TooltipTextPaint = new SolidColorPaint(new SKColor(230, 230, 230)) { SKTypeface = tf },
                 TooltipBackgroundPaint = new SolidColorPaint(new SKColor(30, 30, 38, 230)),
-                Series = new ISeries[]
-                {
-                    new RowSeries<double>
-                    {
-                        Values = displayValues,
-                        Fill = barFill,
-                        Stroke = null,
-                        Rx = 3,
-                        Ry = 3,
-                        MaxBarWidth = 40,
-                        DataLabelsPaint = labelPaint,
-                        DataLabelsSize = dlHSize,
-                        DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.Start,
-                        DataLabelsTranslate = new LiveChartsCore.Drawing.LvcPoint(1.0, 0),
-                        DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0") + "원"
-                    }
-                },
+                Series = seriesListHBar.ToArray(),
                 YAxes = new[]
                 {
                     new Axis
@@ -4568,7 +4801,7 @@ ORDER BY 날짜 DESC";
                 mainStack.Children.Add(SectionCard("집계", aggBody));
 
                 // 기간 섹션
-                DateTime? _eStart = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+                DateTime? _eStart = meta.DbStartDate ?? DateTime.Today.AddDays(-1);
                 DateTime? _eEnd   = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
                 var eStartDate = new System.Windows.Controls.DatePicker { Height = 28, Margin = new Thickness(0, 0, 6, 0), SelectedDate = _eStart };
                 eStartDate.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _eStart = dp.SelectedDate; };
@@ -5038,7 +5271,7 @@ ORDER BY 날짜 DESC";
             if (string.IsNullOrWhiteSpace(cs)) return;
             var groupBy = AllowedGroupByColumns.Contains(meta.DbGroupBy ?? "") ? meta.DbGroupBy! : "매장명";
             var valueCol = AllowedValueColumns.Contains(meta.DbValueColumn ?? "") ? meta.DbValueColumn! : "총매출액";
-            var start = meta.DbStartDate ?? DateTime.Today.AddDays(-7);
+            var start = meta.DbStartDate ?? DateTime.Today.AddDays(-1);
             var end = meta.DbEndDate ?? DateTime.Today.AddDays(-1);
             var sortDir = meta.DbSortAscending ? "ASC" : "DESC";
 
@@ -5055,6 +5288,7 @@ ORDER BY 값 {sortDir}";
 
             var labels = new List<string>();
             var values = new List<double>();
+            var missing = new HashSet<int>();
 
             using (var conn = new SqlConnection(cs))
             {
@@ -5073,8 +5307,40 @@ ORDER BY 값 {sortDir}";
                 }
             }
 
+            // 매장명으로 그룹화할 때만 누락 매장을 차트에 추가 (중분류/메뉴명 그룹엔 무의미)
+            // 매장 필터가 걸려있지 않을 때만 적용
+            if (groupBy == "매장명" && string.IsNullOrEmpty(meta.DbStoreName))
+            {
+                try
+                {
+                    const string skippedSql = @"
+                        SELECT DISTINCT StoreName FROM SkippedStores
+                        WHERE CollectionDate BETWEEN @start AND @end
+                          AND StoreName IS NOT NULL AND StoreName <> ''";
+                    using var conn2 = new SqlConnection(cs);
+                    conn2.Open();
+                    using var cmd2 = new SqlCommand(skippedSql, conn2);
+                    cmd2.Parameters.AddWithValue("@start", start.Date);
+                    cmd2.Parameters.AddWithValue("@end", end.Date);
+                    using var reader2 = cmd2.ExecuteReader();
+                    var existing = new HashSet<string>(labels, StringComparer.OrdinalIgnoreCase);
+                    while (reader2.Read())
+                    {
+                        var name = reader2.IsDBNull(0) ? "" : reader2.GetString(0);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (existing.Contains(name)) continue; // 이미 매출데이터에 있음
+                        labels.Add(name);
+                        values.Add(0);
+                        missing.Add(labels.Count - 1);
+                        existing.Add(name);
+                    }
+                }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData/skipped] {ex.Message}"); }
+            }
+
             meta.Labels = labels;
             meta.StaticData = values;
+            meta.MissingIndices = missing;
         }
 
         private FrameworkElement WrapWithDbDates(FrameworkElement chartControl, ChartMeta meta)
@@ -5175,6 +5441,10 @@ ORDER BY 값 {sortDir}";
                 outerGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 // ── Row 2: 차트 ──────────────────────────────────────────────────
                 outerGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                // 날짜 기본값: 어제
+                if (!meta.DbStartDate.HasValue) meta.DbStartDate = DateTime.Today.AddDays(-1);
+                if (!meta.DbEndDate.HasValue)   meta.DbEndDate   = DateTime.Today.AddDays(-1);
 
                 Func<DateTime?> getStart = () => null;
                 Func<DateTime?> getEnd   = () => null;
@@ -5335,6 +5605,17 @@ ORDER BY 값 {sortDir}";
                 Child = popupBorder
             };
 
+            // 팝업이 열려 있는 동안 LogoWindow 전환을 막기 위해 카운터 사용
+            bool _popupCounted = false;
+            popup.Opened += (_, __) =>
+            {
+                if (!_popupCounted) { _chartDatePickerPopupOpenCount++; _popupCounted = true; }
+            };
+            popup.Closed += (_, __) =>
+            {
+                if (_popupCounted) { _chartDatePickerPopupOpenCount = System.Math.Max(0, _chartDatePickerPopupOpenCount - 1); _popupCounted = false; }
+            };
+
             DateTime? prevApplied = initialDate;
 
             cal.SelectedDatesChanged += (sender2, args2) =>
@@ -5343,10 +5624,27 @@ ORDER BY 값 {sortDir}";
                 {
                     selected = cal.SelectedDate;
                     txt.Text = cal.SelectedDate.Value.ToString("yy-MM-dd");
-                    popup.IsOpen = false;
-                    // onChanged()는 popup.Closed에서 날짜가 바뀐 경우에만 호출
+                    // 마우스에서 손을 뗄 때까지 팝업을 닫지 않음 (아래 MouseLeftButtonUp 핸들러에서 처리)
                 }
             };
+
+            // 날짜(CalendarDayButton) 위에서 마우스 버튼을 뗐을 때만 팝업을 닫고 onChanged() 트리거
+            cal.AddHandler(
+                System.Windows.UIElement.MouseLeftButtonUpEvent,
+                new System.Windows.Input.MouseButtonEventHandler((s, e) =>
+                {
+                    var src = e.OriginalSource as DependencyObject;
+                    while (src != null && src != cal)
+                    {
+                        if (src is System.Windows.Controls.Primitives.CalendarDayButton)
+                        {
+                            if (selected.HasValue) popup.IsOpen = false;
+                            break;
+                        }
+                        src = VisualTreeHelper.GetParent(src);
+                    }
+                }),
+                true);
 
             popup.Closed += (_, _) =>
             {
