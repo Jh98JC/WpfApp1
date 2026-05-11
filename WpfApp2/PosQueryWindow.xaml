@@ -49,13 +49,23 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- 안내 텍스트 -->
+                <!-- 진행 상태 / 안내 텍스트 -->
                 <TextBlock x:Name="HeaderText" Grid.Row="0"
                            Text="누락된 매장을 클릭하면 해당 매장만 취합합니다."
                            FontSize="11" Foreground="#606080" Margin="0,0,0,10"/>
+                <TextBlock x:Name="RunningText" Grid.Row="0"
+                           Text="매장현황 취합중..."
+                           FontSize="12" Foreground="#FFB347"
+                           HorizontalAlignment="Right" VerticalAlignment="Top"
+                           Margin="0,0,0,10" Visibility="Collapsed"/>
 
                 <!-- 누락 목록 -->
                 <Border Grid.Row="1" Background="#13131B" CornerRadius="8" Padding="0">
+                    <Border.Resources>
+                        <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource SlimScrollBarStyle}">
+                            <Setter Property="Opacity" Value="0.7"/>
+                        </Style>
+                    </Border.Resources>
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel x:Name="SkippedList" Margin="0"/>
                     </ScrollViewer>

@@ -51,6 +51,45 @@ namespace 대진포스_쿼리
                 StatusText.Text = "⚠️ Azure DB 연결 문자열을 설정하세요 (⚙️ DB 설정 버튼)";
 
             InitializeWebView();
+
+            if (App.AutoMode)
+            {
+                Title = $"대진포스 쿼리 (자동수집 {App.AutoModeDate:yyyy-MM-dd})";
+                WindowState = WindowState.Minimized;
+                ShowInTaskbar = false;
+                Loaded += AutoModeStartup;
+            }
+        }
+
+        private async void AutoModeStartup(object sender, RoutedEventArgs e)
+        {
+            Loaded -= AutoModeStartup;
+
+            // WebView2 2개 모두 준비될 때까지 대기 (최대 60초)
+            int waitMs = 0;
+            while ((WebView?.CoreWebView2 == null
+                    || WebView2?.CoreWebView2 == null) && waitMs < 60000)
+            {
+                await Task.Delay(500);
+                waitMs += 500;
+            }
+
+            if (WebView?.CoreWebView2 == null)
+            {
+                App.WriteStatus(false, "WebView2 초기화 실패", 0);
+                Application.Current.Shutdown(1);
+                return;
+            }
+
+            if (!DbSaver.IsConfigured)
+            {
+                App.WriteStatus(false, "DB 연결 문자열이 설정되어 있지 않음", 0);
+                Application.Current.Shutdown(3);
+                return;
+            }
+
+            // 기존 버튼 핸들러를 그대로 호출 (자동모드면 내부에서 다이얼로그 스킵)
+            AutoLoginAndCollectButton_Click(this, new RoutedEventArgs());
         }
 
         private void DbSettingsButton_Click(object sender, RoutedEventArgs e)
@@ -171,14 +210,10 @@ namespace 대진포스_쿼리
                     System.IO.Path.Combine(baseDir, "Profile_junco"));
                 var env2 = await CoreWebView2Environment.CreateAsync(null,
                     System.IO.Path.Combine(baseDir, "Profile_junco3"));
-                var env3 = await CoreWebView2Environment.CreateAsync(null,
-                    System.IO.Path.Combine(baseDir, "Profile_junco4"));
-
                 await WebView.EnsureCoreWebView2Async(env1);
                 WebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
                 await WebView2.EnsureCoreWebView2Async(env2);
-                await WebView3.EnsureCoreWebView2Async(env3);
 
                 StatusText.Text = "WebView2 초기화 완료 (병렬 처리 준비됨)";
             }
@@ -516,111 +551,121 @@ namespace 대진포스_쿼리
 
             try
             {
-                // 1단계: 날짜 입력 (하루만 사용)
-                var dateDialog = new Window
+                DateTime currentDate;
+
+                if (App.AutoMode)
                 {
-                    Title = "날짜 설정",
-                    Width = 380,
-                    WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                    ResizeMode = ResizeMode.NoResize,
-                    SizeToContent = SizeToContent.Height
-                };
-
-                var grid = new Grid();
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                grid.Margin = new Thickness(20, 15, 20, 15);
-
-                var titleText = new TextBlock
+                    // 자동모드: 다이얼로그 없이 App.AutoModeDate 사용
+                    currentDate = App.AutoModeDate;
+                    StatusText.Text = $"🤖 자동수집 시작: {currentDate:yyyy-MM-dd}";
+                }
+                else
                 {
-                    Text = "🚀 자동 수집할 날짜를 선택하세요",
-                    FontSize = 14,
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 0, 15)
-                };
-                Grid.SetRow(titleText, 0);
-                grid.Children.Add(titleText);
+                    // 1단계: 날짜 입력 (하루만 사용)
+                    var dateDialog = new Window
+                    {
+                        Title = "날짜 설정",
+                        Width = 380,
+                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                        ResizeMode = ResizeMode.NoResize,
+                        SizeToContent = SizeToContent.Height
+                    };
 
-                var datePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 5) };
-                datePanel.Children.Add(new TextBlock { Text = "날짜:", Width = 60, VerticalAlignment = VerticalAlignment.Center });
-                var yesterday = DateTime.Today.AddDays(-1);
-                var startDatePicker = new DatePicker { Width = 200, SelectedDate = yesterday, DisplayDateEnd = yesterday };
-                datePanel.Children.Add(startDatePicker);
-                Grid.SetRow(datePanel, 1);
-                grid.Children.Add(datePanel);
+                    var grid = new Grid();
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
+                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
+                    grid.Margin = new Thickness(20, 15, 20, 15);
 
-                var infoText = new TextBlock
-                {
-                    Text = "⚡ 확인을 누르면 자동으로:\n   junco + junco3 + junco4 동시 수집 → 통합 파일 생성",
-                    FontSize = 11,
-                    Foreground = System.Windows.Media.Brushes.DarkBlue,
-                    Margin = new Thickness(0, 10, 0, 10)
-                };
-                Grid.SetRow(infoText, 2);
-                grid.Children.Add(infoText);
+                    var titleText = new TextBlock
+                    {
+                        Text = "🚀 자동 수집할 날짜를 선택하세요",
+                        FontSize = 14,
+                        FontWeight = FontWeights.Bold,
+                        Margin = new Thickness(0, 0, 0, 15)
+                    };
+                    Grid.SetRow(titleText, 0);
+                    grid.Children.Add(titleText);
 
-                var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 15, 0, 0) };
-                var okButton = new Button { Content = "확인", Width = 90, Height = 35, Margin = new Thickness(0, 0, 10, 0), FontSize = 13, FontWeight = FontWeights.Bold };
-                var cancelButton = new Button { Content = "취소", Width = 90, Height = 35, FontSize = 13 };
+                    var datePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 5) };
+                    datePanel.Children.Add(new TextBlock { Text = "날짜:", Width = 60, VerticalAlignment = VerticalAlignment.Center });
+                    var yesterday = DateTime.Today.AddDays(-1);
+                    var startDatePicker = new DatePicker { Width = 200, SelectedDate = yesterday, DisplayDateEnd = yesterday };
+                    datePanel.Children.Add(startDatePicker);
+                    Grid.SetRow(datePanel, 1);
+                    grid.Children.Add(datePanel);
 
-                bool dialogOk = false;
-                okButton.Click += (s, ev) => { dialogOk = true; dateDialog.Close(); };
-                cancelButton.Click += (s, ev) => { dateDialog.Close(); };
+                    var infoText = new TextBlock
+                    {
+                        Text = "⚡ 확인을 누르면 자동으로:\n   junco + junco3 동시 수집 → 통합 파일 생성",
+                        FontSize = 11,
+                        Foreground = System.Windows.Media.Brushes.DarkBlue,
+                        Margin = new Thickness(0, 10, 0, 10)
+                    };
+                    Grid.SetRow(infoText, 2);
+                    grid.Children.Add(infoText);
 
-                buttonPanel.Children.Add(okButton);
-                buttonPanel.Children.Add(cancelButton);
-                Grid.SetRow(buttonPanel, 3);
-                grid.Children.Add(buttonPanel);
+                    var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 15, 0, 0) };
+                    var okButton = new Button { Content = "확인", Width = 90, Height = 35, Margin = new Thickness(0, 0, 10, 0), FontSize = 13, FontWeight = FontWeights.Bold };
+                    var cancelButton = new Button { Content = "취소", Width = 90, Height = 35, FontSize = 13 };
 
-                dateDialog.Content = grid;
-                dateDialog.ShowDialog();
+                    bool dialogOk = false;
+                    okButton.Click += (s, ev) => { dialogOk = true; dateDialog.Close(); };
+                    cancelButton.Click += (s, ev) => { dateDialog.Close(); };
 
-                if (!dialogOk || !startDatePicker.SelectedDate.HasValue)
-                {
-                    StatusText.Text = "작업 취소됨";
-                    return;
+                    buttonPanel.Children.Add(okButton);
+                    buttonPanel.Children.Add(cancelButton);
+                    Grid.SetRow(buttonPanel, 3);
+                    grid.Children.Add(buttonPanel);
+
+                    dateDialog.Content = grid;
+                    dateDialog.ShowDialog();
+
+                    if (!dialogOk || !startDatePicker.SelectedDate.HasValue)
+                    {
+                        StatusText.Text = "작업 취소됨";
+                        return;
+                    }
+
+                    currentDate = startDatePicker.SelectedDate.Value;
                 }
 
-                DateTime currentDate = startDatePicker.SelectedDate.Value;
                 string currentDateStr = currentDate.ToString("yyyyMMdd");
                 _collectStartDate = currentDate;
                 _collectEndDate = currentDate;
 
-                // 세 계정 정보
+                // 두 계정 정보
                 var accounts = new[]
                 {
                     new { UserId = "junco",  Password = "dines9293!!" },
-                    new { UserId = "junco3", Password = "dines9293!!" },
-                    new { UserId = "junco4", Password = "dines9293!!" }
+                    new { UserId = "junco3", Password = "dines9293!!" }
                 };
 
                 // 진행바 초기화
                 ProgressBar.Value = 0;
                 ProgressText.Text = "0%";
-                DetailText.Text = $"{currentDate:yyyy-MM-dd} | 3개 계정 병렬 수집 시작...";
+                DetailText.Text = $"{currentDate:yyyy-MM-dd} | 2개 계정 병렬 수집 시작...";
 
-                StatusText.Text = $"⚡ {currentDate:yyyy-MM-dd} - 3개 계정 병렬 수집 시작...";
+                StatusText.Text = $"⚡ {currentDate:yyyy-MM-dd} - 2개 계정 병렬 수집 시작...";
 
                 // 해당 날짜의 모든 계정 데이터 초기화
                 _allAccountsData.Clear();
                 _failedStores.Clear();
                 _isAutoCollecting = true;
 
-                // 세 계정 전용 로컬 리스트
+                // 두 계정 전용 로컬 리스트
                 var list1 = new List<List<string>>();
                 var list2 = new List<List<string>>();
-                var list3 = new List<List<string>>();
 
-                // 세 계정을 병렬 로그인 → 수집
-                // acctIndex: 0=junco(파란), 1=junco3(초록), 2=junco4(주황)
+                // 두 계정을 병렬 로그인 → 수집
+                // acctIndex: 0=junco(파란), 1=junco3(초록)
                 async Task CollectAccount(Microsoft.Web.WebView2.Wpf.WebView2 wv, string userId, string password, List<List<string>> outList, int acctIndex)
                 {
-                    var acctStatus   = acctIndex == 0 ? Account1StatusText   : acctIndex == 1 ? Account2StatusText   : Account3StatusText;
-                    var acctDetail   = acctIndex == 0 ? Account1DetailText   : acctIndex == 1 ? Account2DetailText   : Account3DetailText;
-                    var acctProgress = acctIndex == 0 ? Account1ProgressBar  : acctIndex == 1 ? Account2ProgressBar  : Account3ProgressBar;
-                    var acctProgTxt  = acctIndex == 0 ? Account1ProgressText : acctIndex == 1 ? Account2ProgressText : Account3ProgressText;
+                    var acctStatus   = acctIndex == 0 ? Account1StatusText   : Account2StatusText;
+                    var acctDetail   = acctIndex == 0 ? Account1DetailText   : Account2DetailText;
+                    var acctProgress = acctIndex == 0 ? Account1ProgressBar  : Account2ProgressBar;
+                    var acctProgTxt  = acctIndex == 0 ? Account1ProgressText : Account2ProgressText;
 
                     acctStatus.Text    = "시작 중...";
                     acctDetail.Text    = "";
@@ -648,16 +693,14 @@ namespace 대진포스_쿼리
 
                 await Task.WhenAll(
                     CollectAccount(WebView,  accounts[0].UserId, accounts[0].Password, list1, 0),
-                    CollectAccount(WebView2, accounts[1].UserId, accounts[1].Password, list2, 1),
-                    CollectAccount(WebView3, accounts[2].UserId, accounts[2].Password, list3, 2)
+                    CollectAccount(WebView2, accounts[1].UserId, accounts[1].Password, list2, 1)
                 );
 
-                // 세 결과를 _allAccountsData에 병합
+                // 두 결과를 _allAccountsData에 병합
                 _allAccountsData.AddRange(list1);
                 _allAccountsData.AddRange(list2);
-                _allAccountsData.AddRange(list3);
 
-                DetailText.Text = $"{currentDate:yyyy-MM-dd} | junco:{list1.Count} + junco3:{list2.Count} + junco4:{list3.Count}개 매장 수집 완료";
+                DetailText.Text = $"{currentDate:yyyy-MM-dd} | junco:{list1.Count} + junco3:{list2.Count}개 매장 수집 완료";
 
                 // 파일 저장
                 SaveAllAccountsDataWithDate(currentDateStr, currentDate);
@@ -672,11 +715,29 @@ namespace 대진포스_쿼리
 
                 StatusText.Text = "✅ 모든 계정 처리 완료!";
                 ResetAutoCollectUI();
+
+                if (App.AutoMode)
+                {
+                    int totalRows = _allAccountsData.Sum(s => s?.Count ?? 0);
+                    App.WriteStatus(true, $"수집 완료 ({_allAccountsData.Count}개 매장, {totalRows}행)", totalRows);
+                    await Task.Delay(800);
+                    Application.Current.Shutdown(0);
+                    return;
+                }
             }
             catch (Exception ex)
             {
                 StatusText.Text = "❌ 오류 발생";
                 ResetAutoCollectUI();
+
+                if (App.AutoMode)
+                {
+                    App.WriteStatus(false, $"오류: {ex.Message}", 0);
+                    await Task.Delay(500);
+                    Application.Current.Shutdown(2);
+                    return;
+                }
+
                 MessageBox.Show($"오류: {ex.Message}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -2317,6 +2378,13 @@ namespace 대진포스_쿼리
             {
                 if (_allAccountsData.Count == 0)
                 {
+                    if (App.AutoMode)
+                    {
+                        StatusText.Text = $"⚠️ {targetDate:yyyy-MM-dd} 수집된 데이터 없음";
+                        App.WriteStatus(false, "수집된 데이터 없음 (로그인/스크래핑 실패 가능성)", 0);
+                        Application.Current.Shutdown(4);
+                        return;
+                    }
                     MessageBox.Show($"{targetDate:yyyy-MM-dd} 데이터가 수집되지 않았습니다.", "데이터 없음", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }

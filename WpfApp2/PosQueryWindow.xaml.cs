@@ -12,8 +12,29 @@ namespace WpfApp2
         public PosQueryWindow()
         {
             InitializeComponent();
+            DaejinPosService.StatusChanged += OnPosStatus;
+            Closed += (_, _) => DaejinPosService.StatusChanged -= OnPosStatus;
             Loaded += async (_, _) => await LoadSkippedStoresAsync();
         }
+
+        private void OnPosStatus(string status)
+        {
+            Dispatcher.Invoke(async () =>
+            {
+                if (!string.IsNullOrEmpty(status))
+                {
+                    RunningText.Text = status;
+                    RunningText.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    RunningText.Visibility = Visibility.Collapsed;
+                    await LoadSkippedStoresAsync();
+                }
+            });
+        }
+
+        public async Task RefreshAsync() => await LoadSkippedStoresAsync();
 
         private async Task LoadSkippedStoresAsync()
         {

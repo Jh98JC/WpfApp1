@@ -55,7 +55,9 @@ namespace WpfApp2
         public string StoreName { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
-        public string DisplayText => $"{CollectionDate:yyyy-MM-dd}  {StoreName}";
+        public string DisplayText => string.IsNullOrEmpty(Reason)
+            ? $"{CollectionDate:yyyy-MM-dd}  {StoreName}"
+            : $"{CollectionDate:yyyy-MM-dd}  {StoreName}  [{Reason}]";
     }
 
     public static class DatabaseService
@@ -358,8 +360,8 @@ namespace WpfApp2
         {
             try
             {
-                // 성공 건수가 1개 이상인 로그가 있을 때만 "이미 취합됨"으로 판단
-                const string sql = "SELECT COUNT(*) FROM CollectionLogs WHERE CollectionDate = @date AND SuccessCount > 0";
+                // 한 번이라도 처리(성공+누락 합산 1건 이상)된 적이 있으면 이미 취합된 것으로 간주
+                const string sql = "SELECT COUNT(*) FROM CollectionLogs WHERE CollectionDate = @date AND TotalStores > 0";
                 await using var conn = new SqlConnection(DataConnectionString);
                 await conn.OpenAsync();
                 await using var cmd = new SqlCommand(sql, conn);
@@ -367,6 +369,50 @@ namespace WpfApp2
                 return (int)(await cmd.ExecuteScalarAsync())! > 0;
             }
             catch { return false; }
+        }
+
+        public static async Task<int> GetRowCountForDateAsync(DateTime date)
+        {
+            try
+            {
+                const string sql = "SELECT COUNT(*) FROM 매출데이터 WHERE CAST(날짜 AS DATE) = @date";
+                await using var conn = new SqlConnection(DataConnectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@date", date.Date);
+                var result = await cmd.ExecuteScalarAsync();
+                return (result == null || result == DBNull.Value) ? 0 : Convert.ToInt32(result);
+            }
+            catch { return 0; }
+        }
+
+        public static async Task<DateTime?> GetLatestDataDateAsync()
+        {
+            try
+            {
+                const string sql = "SELECT MAX(CAST(날짜 AS DATE)) FROM 매출데이터";
+                await using var conn = new SqlConnection(DataConnectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(sql, conn);
+                var result = await cmd.ExecuteScalarAsync();
+                if (result == null || result == DBNull.Value) return null;
+                return Convert.ToDateTime(result);
+            }
+            catch { return null; }
+        }
+
+        public static async Task DeleteSkippedStoresForDateAsync(DateTime date)
+        {
+            try
+            {
+                const string sql = "DELETE FROM SkippedStores WHERE CollectionDate = @date";
+                await using var conn = new SqlConnection(DataConnectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@date", date.Date);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            catch { }
         }
 
         public static async Task SaveSalesDataAsync(DateTime date, string storeName, decimal totalAmount)

@@ -5405,10 +5405,32 @@ ORDER BY 값 {sortDir}";
                 ThemeManager.ThemeChanged -= themeHandler;
             };
 
-            btn.MouseLeftButtonDown += (sender2, args2) =>
+            bool _btnDragMoved = false;
+            System.Windows.Point _btnDragStart = new();
+
+            btn.PreviewMouseLeftButtonDown += (sender2, args2) =>
             {
-                popup.IsOpen = !popup.IsOpen;
-                args2.Handled = true;
+                _btnDragMoved = false;
+                _btnDragStart = args2.GetPosition(null);
+            };
+
+            btn.PreviewMouseMove += (sender2, args2) =>
+            {
+                if (args2.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+                {
+                    var pos = args2.GetPosition(null);
+                    if (Math.Abs(pos.X - _btnDragStart.X) > 4 || Math.Abs(pos.Y - _btnDragStart.Y) > 4)
+                        _btnDragMoved = true;
+                }
+            };
+
+            btn.MouseLeftButtonUp += (sender2, args2) =>
+            {
+                if (!_btnDragMoved)
+                {
+                    popup.IsOpen = !popup.IsOpen;
+                    args2.Handled = true;
+                }
             };
 
             return (btn, () => selected);

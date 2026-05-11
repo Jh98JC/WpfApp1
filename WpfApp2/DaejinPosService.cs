@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WpfApp2
@@ -24,6 +26,9 @@ namespace WpfApp2
         public static string? LastError { get; private set; }
         public static string LastRunInfo { get; private set; } = string.Empty;
         public static DateTime? LastRunTime { get; private set; }
+
+        // 한 세션 내에서 같은 날짜 스크래퍼를 반복 실행하지 않도록 추적
+        private static readonly HashSet<DateTime> _scrapedDatesThisSession = new();
 
         public static event Action<string>? StatusChanged;
 
@@ -80,13 +85,58 @@ namespace WpfApp2
                     foreach (var store in configuredStores)
                     {
                         bool ok = await TryCollectFromExternalAsync(store, date);
-                        if (ok) success++;
+                        if (ok)
+                        {
+                            success++;
+                            try { await DatabaseService.DeleteSkippedStoreByNameAndDateAsync(date, store.StoreName); } catch { }
+                        }
                         else { skipped++; try { await DatabaseService.AddSkippedStoreAsync(date, store.StoreName, "쿼리 실패"); } catch { } }
                     }
                 }
                 else
                 {
-                    // 자동 모드: DataConnectionString의 매출데이터 테이블에서 매장 목록 파악
+                    // 자동 모드: 매출데이터 테이블이 해당일 데이터를 갖고 있어야 한다.
+                    // 데이터가 아직 들어오지 않은 경우(전체 0건)와 일부 매장만 누락된 경우를 구분한다.
+                    int rowsForDate = await DatabaseService.GetRowCountForDateAsync(date);
+                    if (rowsForDate == 0)
+                    {
+                        // 외부 스크래퍼(대진포스 쿼리.exe)를 한 번 시도해서 매출데이터를 채워본다.
+                        bool alreadyTried;
+                        lock (_scrapedDatesThisSession)
+                            alreadyTried = !_scrapedDatesThisSession.Add(date);
+
+                        if (!alreadyTried)
+                        {
+                            StatusChanged?.Invoke($"대진포스 쿼리 자동 수집중... ({date:yyyy-MM-dd})");
+                            var (launched, ok, msg) = await TryRunExternalScraperAsync(date);
+                            if (launched && ok)
+                            {
+                                rowsForDate = await DatabaseService.GetRowCountForDateAsync(date);
+                                StatusChanged?.Invoke("매장현황 취합중...");
+                            }
+                            else if (launched && !ok)
+                            {
+                                LastError = msg;
+                                LastRunInfo = $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} 외부 수집기 실패 — {msg}";
+                                LastRunTime = DateTime.Now;
+                                return;
+                            }
+                            // launched == false : exe 못 찾음 → 아래 "미도착" 메시지로 자연스럽게 진행
+                        }
+
+                        if (rowsForDate == 0)
+                        {
+                            // 어제 데이터 자체가 아직 미도착 → 누락 처리하지 않고 로그도 남기지 않음(다음 실행 때 재시도)
+                            try { await DatabaseService.DeleteSkippedStoresForDateAsync(date); } catch { }
+                            var latest = await DatabaseService.GetLatestDataDateAsync();
+                            LastRunTime = DateTime.Now;
+                            LastRunInfo = latest.HasValue
+                                ? $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} 데이터 미도착 (최신: {latest:yyyy-MM-dd})"
+                                : $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} 매출데이터 비어있음";
+                            return;
+                        }
+                    }
+
                     List<string> storeNames;
                     if (configuredStores.Count > 0)
                         // pos_stores.json에 매장명만 지정된 경우
@@ -100,8 +150,12 @@ namespace WpfApp2
                         try
                         {
                             bool ok = await DatabaseService.CheckAndRecordStoreSalesAsync(date, storeName);
-                            if (ok) success++;
-                            else { skipped++; try { await DatabaseService.AddSkippedStoreAsync(date, storeName, "해당일 데이터 없음"); } catch { } }
+                            if (ok)
+                            {
+                                success++;
+                                try { await DatabaseService.DeleteSkippedStoreByNameAndDateAsync(date, storeName); } catch { }
+                            }
+                            else { skipped++; try { await DatabaseService.AddSkippedStoreAsync(date, storeName, "해당일 매장 매출 0건"); } catch { } }
                         }
                         catch (Exception storeEx)
                         {
@@ -112,12 +166,12 @@ namespace WpfApp2
                     }
                 }
 
-                if (success > 0)
+                if (success + skipped > 0)
                     try { await DatabaseService.AddCollectionLogAsync(date, success + skipped, success, skipped); } catch { }
 
                 LastRunTime = DateTime.Now;
                 if (success == 0 && skipped == 0)
-                    LastRunInfo = $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} — 매장 데이터 없음";
+                    LastRunInfo = $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} — 매장 목록 없음";
                 else if (skipped == 0)
                     LastRunInfo = $"[{DateTime.Now:HH:mm}] {date:yyyy-MM-dd} 취합완료 ({success}개 매장)";
                 else
@@ -192,6 +246,94 @@ namespace WpfApp2
                 return JsonSerializer.Deserialize<List<PosStoreConfig>>(data) ?? new List<PosStoreConfig>();
             }
             catch { return new List<PosStoreConfig>(); }
+        }
+
+        // ── 외부 대진포스 쿼리.exe 자동 호출 ─────────────────────────────────
+        private static async Task<(bool launched, bool success, string message)> TryRunExternalScraperAsync(DateTime date)
+        {
+            string? exePath = FindScraperExe();
+            if (exePath == null)
+                return (false, false, "대진포스 쿼리.exe를 찾을 수 없음");
+
+            string statusFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WpfApp2", $"pos_scrape_{date:yyyyMMdd}_{Guid.NewGuid():N}.txt");
+
+            try { Directory.CreateDirectory(Path.GetDirectoryName(statusFile)!); } catch { }
+            try { if (File.Exists(statusFile)) File.Delete(statusFile); } catch { }
+
+            System.Diagnostics.Process? process = null;
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(exePath)
+                {
+                    Arguments = $"--auto --date={date:yyyy-MM-dd} --status=\"{statusFile}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory
+                };
+                process = System.Diagnostics.Process.Start(psi);
+                if (process == null)
+                    return (true, false, "Process.Start 실패");
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(true); } catch { }
+                    return (true, false, "스크래퍼 타임아웃 (15분)");
+                }
+
+                if (!File.Exists(statusFile))
+                    return (true, false, $"스크래퍼 종료(코드 {process.ExitCode}) 그러나 상태파일 없음");
+
+                var lines = await File.ReadAllLinesAsync(statusFile);
+                bool ok = lines.Any(l => l.StartsWith("success=true", StringComparison.OrdinalIgnoreCase));
+                string msg = lines.FirstOrDefault(l => l.StartsWith("message=", StringComparison.OrdinalIgnoreCase))?.Substring(8) ?? "";
+                return (true, ok, ok ? (string.IsNullOrEmpty(msg) ? "수집 완료" : msg) : (string.IsNullOrEmpty(msg) ? $"실패(코드 {process.ExitCode})" : msg));
+            }
+            catch (Exception ex)
+            {
+                return (true, false, $"실행 오류: {ex.Message}");
+            }
+            finally
+            {
+                try { if (File.Exists(statusFile)) File.Delete(statusFile); } catch { }
+                process?.Dispose();
+            }
+        }
+
+        private static string? FindScraperExe()
+        {
+            const string ExeName = "대진포스 쿼리.exe";
+
+            var candidates = new List<string>
+            {
+                // WpfApp2.exe와 같은 폴더에 배포한 경우
+                Path.Combine(AppContext.BaseDirectory, ExeName),
+                // 개발환경: WpfApp2\bin\Debug\net8.0-windows → ..\..\..\..\대진포스 쿼리\bin\Release|Debug
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
+                // 절대경로 폴백 (이 머신 한정)
+                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Release\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Debug\" + ExeName,
+            };
+
+            foreach (var c in candidates)
+            {
+                try
+                {
+                    var full = Path.GetFullPath(c);
+                    if (File.Exists(full)) return full;
+                }
+                catch { }
+            }
+            return null;
         }
     }
 }
