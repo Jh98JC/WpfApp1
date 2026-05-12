@@ -30,6 +30,20 @@ namespace WpfApp2
         // 현재 백그라운드로 실행 중인 대진포스 쿼리.exe의 PID — 보기 버튼에서 사용
         public static int? RunningProcessId { get; private set; }
 
+        // 사용자가 '수동 실행'으로 띄운 대진포스 쿼리.exe의 PID — 중복 실행 방지에 사용
+        public static int? InteractiveProcessId { get; private set; }
+
+        private static bool IsProcessAlive(int? pid)
+        {
+            if (!pid.HasValue || pid.Value <= 0) return false;
+            try
+            {
+                var p = System.Diagnostics.Process.GetProcessById(pid.Value);
+                return !p.HasExited;
+            }
+            catch { return false; }
+        }
+
         // 자동 수집 시 사용할 기준 날짜 — 한국 시간 기준 오전 8시 이전이면 그저께, 이후면 어제
         // 새벽 시간대(0~7시)에 어제 데이터가 아직 POS에 도착 안 한 경우를 회피하기 위함.
         public static DateTime GetAutoTargetDate()
@@ -47,6 +61,10 @@ namespace WpfApp2
         private static readonly HashSet<DateTime> _scrapedDatesThisSession = new();
 
         public static event Action<string>? StatusChanged;
+
+        // 자동 모드 스크래퍼 실행 시 자식에 전달할 부모 HWND 공급자.
+        // MainWindow가 SourceInitialized에서 등록한다 — UI 스레드 접근이 필요할 수 있어 콜백 형태.
+        public static Func<IntPtr>? ParentHwndProvider;
 
         public static async Task RunAsync(DateTime? targetDate = null)
         {
@@ -377,16 +395,45 @@ namespace WpfApp2
         }
 
         // ── 대진포스 쿼리.exe를 사용자 모드로 실행 (--auto 없이) ────────────
-        public static (bool launched, string message) LaunchInteractive()
+        // 위치/크기/부모 HWND를 전달하면 자식이 해당 좌표/소유 관계로 표시됨.
+        // 이미 실행 중이면 기존 창을 활성화(앞으로 가져옴)하고 새로 띄우지 않는다.
+        public static (bool launched, string message) LaunchInteractive(
+            double? x = null, double? y = null, double? width = null, double? height = null,
+            IntPtr parentHwnd = default)
         {
+            // 이미 실행 중인 사용자 인스턴스가 있으면 좌표만 갱신해 표시 신호를 보낸다.
+            if (IsProcessAlive(InteractiveProcessId))
+            {
+                if (x.HasValue && y.HasValue && width.HasValue && height.HasValue)
+                    WriteShowGeometry(x.Value, y.Value, width.Value, height.Value);
+                try
+                {
+                    using (var ev = System.Threading.EventWaitHandle.OpenExisting("DaejinPosShow_" + InteractiveProcessId!.Value))
+                        ev.Set();
+                }
+                catch { /* 자식이 아직 핸들을 만들지 않았을 수 있음 */ }
+                return (true, "이미 실행 중 — 기존 창을 활성화");
+            }
+            InteractiveProcessId = null;
+
             string? exePath = FindScraperExe();
             if (exePath == null)
                 return (false, "대진포스 쿼리.exe를 찾을 수 없음");
 
             try
             {
+                var sb = new System.Text.StringBuilder();
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                if (x.HasValue)      sb.Append($"--x={x.Value.ToString(ci)} ");
+                if (y.HasValue)      sb.Append($"--y={y.Value.ToString(ci)} ");
+                if (width.HasValue)  sb.Append($"--width={width.Value.ToString(ci)} ");
+                if (height.HasValue) sb.Append($"--height={height.Value.ToString(ci)} ");
+                if (parentHwnd != IntPtr.Zero)
+                    sb.Append($"--parent={parentHwnd.ToInt64().ToString(ci)} ");
+
                 var psi = new System.Diagnostics.ProcessStartInfo(exePath)
                 {
+                    Arguments = sb.ToString().TrimEnd(),
                     UseShellExecute = false,
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory
                 };
@@ -394,12 +441,43 @@ namespace WpfApp2
                 if (proc == null)
                     return (false, "Process.Start 실패");
                 ChildProcessTracker.AddProcess(proc);
+                InteractiveProcessId = proc.Id;
+                // 자식 프로세스 종료 시 추적 해제
+                try
+                {
+                    proc.EnableRaisingEvents = true;
+                    proc.Exited += (_, __) =>
+                    {
+                        if (InteractiveProcessId == proc.Id) InteractiveProcessId = null;
+                    };
+                }
+                catch { }
                 return (true, exePath);
             }
             catch (Exception ex)
             {
                 return (false, $"실행 오류: {ex.Message}");
             }
+        }
+
+        // 보기 버튼이 자식 창을 표시할 위치/크기를 미리 파일에 기록.
+        // 자식의 ShowFromBackground가 이 파일을 읽어 적용.
+        public static void WriteShowGeometry(double x, double y, double width, double height)
+        {
+            try
+            {
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "WpfApp2", "pos_show_geom.txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                File.WriteAllText(path,
+                    $"x={x.ToString(ci)}\n" +
+                    $"y={y.ToString(ci)}\n" +
+                    $"width={width.ToString(ci)}\n" +
+                    $"height={height.ToString(ci)}\n");
+            }
+            catch { }
         }
 
         // ── 외부 대진포스 쿼리.exe 자동 호출 ─────────────────────────────────
@@ -422,6 +500,17 @@ namespace WpfApp2
             string args = $"--auto --date={date:yyyy-MM-dd} --status=\"{statusFile}\"";
             if (!string.IsNullOrEmpty(storeName))
                 args += $" --store=\"{storeName}\"";
+            // 부모 HWND를 전달해 자식이 메인윈도우와 같이 가려지도록 한다.
+            if (ParentHwndProvider != null)
+            {
+                try
+                {
+                    var hwnd = ParentHwndProvider();
+                    if (hwnd != IntPtr.Zero)
+                        args += $" --parent={hwnd.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                }
+                catch { }
+            }
 
             System.Diagnostics.Process? process = null;
             try

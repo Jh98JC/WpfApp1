@@ -43,9 +43,19 @@ namespace WpfApp2
         public int TotalStores { get; set; }
         public int SuccessCount { get; set; }
         public int SkippedCount { get; set; }
-        public string DisplayText => SkippedCount > 0
-            ? $"{CollectionDate:yyyy-MM-dd}  매장매출자료 취합완료  (누락 {SkippedCount}건)"
-            : $"{CollectionDate:yyyy-MM-dd}  매장매출자료 취합완료";
+        public int ZeroSalesCount { get; set; }
+
+        public string DisplayText
+        {
+            get
+            {
+                var parts = new System.Collections.Generic.List<string>();
+                if (SkippedCount > 0) parts.Add($"누락 {SkippedCount}건");
+                if (ZeroSalesCount > 0) parts.Add($"0원 {ZeroSalesCount}개");
+                string suffix = parts.Count > 0 ? $"  ({string.Join(", ", parts)})" : "";
+                return $"{CollectionDate:yyyy-MM-dd}  매장매출자료 취합완료{suffix}";
+            }
+        }
     }
 
     public class SkippedStoreEntry
@@ -488,9 +498,12 @@ namespace WpfApp2
 
         public static async Task<List<CollectionLogEntry>> GetCollectionLogsAsync()
         {
+            // 같은 날짜의 StoreSales 중 TotalAmount = 0 인 매장 개수를 서브쿼리로 같이 조회
             const string sql = """
-                SELECT CollectionDate, CollectedAt, TotalStores, SuccessCount, SkippedCount
-                FROM CollectionLogs ORDER BY CollectionDate DESC
+                SELECT cl.CollectionDate, cl.CollectedAt, cl.TotalStores, cl.SuccessCount, cl.SkippedCount,
+                       (SELECT COUNT(*) FROM StoreSales s
+                        WHERE s.SaleDate = cl.CollectionDate AND s.TotalAmount = 0) AS ZeroCount
+                FROM CollectionLogs cl ORDER BY cl.CollectionDate DESC
                 """;
             var list = new List<CollectionLogEntry>();
             await using var conn = new SqlConnection(DataConnectionString);
@@ -505,7 +518,8 @@ namespace WpfApp2
                     CollectedAt    = reader.GetDateTime(1),
                     TotalStores    = reader.GetInt32(2),
                     SuccessCount   = reader.GetInt32(3),
-                    SkippedCount   = reader.GetInt32(4)
+                    SkippedCount   = reader.GetInt32(4),
+                    ZeroSalesCount = reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
                 });
             }
             return list;

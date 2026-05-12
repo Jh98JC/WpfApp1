@@ -109,8 +109,19 @@ namespace WpfApp2
 
         private void posRunBtn_Click(object sender, RoutedEventArgs e)
         {
-            // 수동 실행: 대진포스 쿼리.exe를 사용자 모드로 실행하여 직접 날짜를 설정할 수 있게 함
-            var (launched, msg) = DaejinPosService.LaunchInteractive();
+            // 수동 실행: 대진포스 쿼리.exe를 사용자 모드로 실행.
+            // 메인윈도우 우측하단에 메인 크기의 1/4로 열리도록 좌표 전달.
+            // 이미 실행 중이면 LaunchInteractive 내부에서 기존 창을 활성화한다.
+            double? x = null, y = null, w = null, h = null;
+            IntPtr parent = IntPtr.Zero;
+            if (Owner is MainWindow main)
+            {
+                var (gx, gy, gw, gh) = main.ComputePosQueryGeometry();
+                x = gx; y = gy; w = gw; h = gh;
+                parent = main.GetMainHwnd();
+            }
+
+            var (launched, msg) = DaejinPosService.LaunchInteractive(x, y, w, h, parent);
             if (!launched)
             {
                 PosLogEmpty.Text = $"실행 실패: {msg}";

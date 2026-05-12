@@ -279,6 +279,9 @@ namespace WpfApp2
             using var curModule = curProcess.MainModule!;
             _hookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, GetModuleHandle(curModule.ModuleName), 0);
 
+            // 자식 프로세스(대진포스 쿼리.exe)가 부모로 삼을 HWND 제공
+            DaejinPosService.ParentHwndProvider = () => GetMainHwnd();
+
             InitNotifyIcon();
         }
 
@@ -406,6 +409,9 @@ namespace WpfApp2
                         if (!r.IsEmpty && r.Contains(mousePos)) return;
                     }
                 }
+                // 별도 프로세스인 대진포스 쿼리 창도 자식 취급
+                var posRect = GetVisibleDaejinPosRect();
+                if (!posRect.IsEmpty && posRect.Contains(mousePos)) return;
             }
 
             // 타이머 시작 (이미 동작 중이면 재시작)
@@ -446,6 +452,11 @@ namespace WpfApp2
                     if (!r.IsEmpty && r.Contains(mousePos)) return; // 마우스가 자식창 위 → 아무것도 하지 않음
                 }
             }
+            // 별도 프로세스인 대진포스 쿼리도 자식 취급
+            {
+                var posRect = GetVisibleDaejinPosRect();
+                if (!posRect.IsEmpty && posRect.Contains(mousePos)) return;
+            }
 
             // 마우스가 어떤 자식창 위에도 없을 때만 닫고 LogoWindow로 전환
             foreach (Window win in System.Windows.Application.Current.Windows.Cast<Window>().ToList())
@@ -456,6 +467,8 @@ namespace WpfApp2
                     try { win.Close(); } catch { }
                 }
             }
+            // 대진포스 쿼리도 같이 숨김 (별도 프로세스 — 신호로 처리)
+            HideAllDaejinPosWindows();
 
             // 열려있는 모든 컨텍스트 메뉴 닫기
             CloseAllContextMenus();
@@ -639,6 +652,13 @@ namespace WpfApp2
                     return;
                 }
 
+                // 보기로 전환할 때는 메인윈도우 좌측하단에 메인의 1/4 크기로 표시되도록 좌표를 기록.
+                if (!_posWindowVisible)
+                {
+                    var (x, y, w, h) = ComputePosQueryGeometry();
+                    DaejinPosService.WriteShowGeometry(x, y, w, h);
+                }
+
                 string eventName = (_posWindowVisible ? "DaejinPosHide_" : "DaejinPosShow_") + pid.Value;
                 try
                 {
@@ -663,23 +683,44 @@ namespace WpfApp2
             }
         }
 
+        // 대진포스 쿼리 창의 표시 좌표/크기를 계산.
+        // 위치: 메인윈도우 우측하단, 크기: 메인윈도우의 가로/세로 절반 (= 1/4 면적).
+        internal (double x, double y, double width, double height) ComputePosQueryGeometry()
+        {
+            double mw = Math.Max(this.ActualWidth, 200);
+            double mh = Math.Max(this.ActualHeight, 200);
+            double w = Math.Max(mw / 2.0, 380);
+            double h = Math.Max(mh / 2.0, 280);
+            double x = this.Left + (mw - w);
+            double y = this.Top  + (mh - h);
+            return (x, y, w, h);
+        }
+
+        // 자식(대진포스 쿼리)이 owner로 삼을 수 있도록 메인윈도우의 HWND를 반환.
+        internal IntPtr GetMainHwnd()
+        {
+            try { return new System.Windows.Interop.WindowInteropHelper(this).Handle; }
+            catch { return IntPtr.Zero; }
+        }
+
         // DaejinPosService가 추적하는 PID로 그 프로세스의 모든 top-level 창을 EnumWindows로 찾는다.
         // MainWindowHandle은 캐시되어 0인 경우가 있고 한글 ProcessName 조회도 가끔 실패하므로 직접 열거가 가장 안전.
         private IntPtr FindDaejinPosTopWindow()
+            => FindTopWindowForPid(DaejinPosService.RunningProcessId);
+
+        private IntPtr FindTopWindowForPid(int? pid)
         {
-            int? pid = DaejinPosService.RunningProcessId;
             if (!pid.HasValue || pid.Value <= 0) return IntPtr.Zero;
 
             IntPtr result = IntPtr.Zero;
             EnumWindows((hwnd, _) =>
             {
-                if (!IsWindowVisible(hwnd)) { /* 자동모드라 invisible이지만 일단 모든 창 다 본다 */ }
                 GetWindowThreadProcessId(hwnd, out uint windowPid);
                 if (windowPid == (uint)pid.Value)
                 {
-                    // top-level인지 확인 (Owner 없는 것만)
+                    // top-level인지 확인 (Owner 없는 것만 — GWL_HWNDPARENT는 GetWindow(GW_OWNER)와 별개 개념)
                     var owner = GetWindow(hwnd, GW_OWNER);
-                    if (owner == IntPtr.Zero)
+                    if (owner == IntPtr.Zero || owner == new System.Windows.Interop.WindowInteropHelper(this).Handle)
                     {
                         result = hwnd;
                         return false; // 첫 번째 매치에서 중단
@@ -689,6 +730,43 @@ namespace WpfApp2
             }, IntPtr.Zero);
 
             return result;
+        }
+
+        // 현재 화면에 보이는 대진포스 쿼리 창의 사각형을 반환 (자동/사용자 모드 모두 확인).
+        // 화면 밖(-10000 이하)이면 숨김으로 간주하고 Empty 반환.
+        private System.Drawing.Rectangle GetVisibleDaejinPosRect()
+        {
+            foreach (var pid in new[] { DaejinPosService.RunningProcessId, DaejinPosService.InteractiveProcessId })
+            {
+                var hwnd = FindTopWindowForPid(pid);
+                if (hwnd == IntPtr.Zero) continue;
+                if (!IsWindowVisible(hwnd)) continue;
+                if (!GetWindowRect(hwnd, out var rc)) continue;
+                if (rc.Left < -10000 || rc.Top < -10000) continue; // 화면 밖에 숨김 상태
+                return new System.Drawing.Rectangle(rc.Left, rc.Top, rc.Right - rc.Left, rc.Bottom - rc.Top);
+            }
+            return System.Drawing.Rectangle.Empty;
+        }
+
+        // 마우스 이탈 시 보이는 대진포스 쿼리 창을 모두 숨김 처리 (DaejinPosHide_{pid} 신호).
+        private void HideAllDaejinPosWindows()
+        {
+            foreach (var pid in new[] { DaejinPosService.RunningProcessId, DaejinPosService.InteractiveProcessId })
+            {
+                if (!pid.HasValue || pid.Value <= 0) continue;
+                try
+                {
+                    using (var ev = System.Threading.EventWaitHandle.OpenExisting("DaejinPosHide_" + pid.Value))
+                        ev.Set();
+                }
+                catch { /* 자식이 아직 이벤트를 만들지 않았거나 종료됨 */ }
+            }
+            // 보기 토글 상태 동기화 — 다시 클릭하면 '보기'로 시작
+            if (_posWindowVisible)
+            {
+                _posWindowVisible = false;
+                if (PosShowBtn != null) PosShowBtn.Content = "보기";
+            }
         }
 
         // SW_SHOWNORMAL, ShowWindow, SetForegroundWindow는 본 클래스 다른 곳에 이미 선언되어 있어 재사용.
@@ -2501,6 +2579,8 @@ namespace WpfApp2
             public List<string> Labels { get; set; } = new List<string>();
             // DB 차트 — Labels에서 누락 매장인 인덱스 집합 (있으면 그 위치는 빨간 막대로 표시)
             public HashSet<int> MissingIndices { get; set; } = new HashSet<int>();
+            // DB 차트 — Labels에서 0원 매출 매장 인덱스 (별도 노란 막대로 표시)
+            public HashSet<int> ZeroIndices { get; set; } = new HashSet<int>();
             public double Width { get; set; } = 300;
             public double Height { get; set; } = 200;
             public string Title { get; set; } = "";
@@ -2530,6 +2610,10 @@ namespace WpfApp2
             public Dictionary<string, double> RankListColumnWidths { get; set; } = new Dictionary<string, double>();
             public List<string> RankListColumnOrder { get; set; } = new List<string>();
             public Dictionary<string, string> RankListColumnAlignments { get; set; } = new Dictionary<string, string>();
+            // 순위표에 표시할 최대 행 수 (0 = 무제한)
+            public int RankListMaxItems { get; set; } = 10;
+            // BEST/WORST 다이얼로그에 표시할 개수
+            public int RankListBestWorstCount { get; set; } = 5;
         }
 
         private void CreateButtonInBorder_Click(object sender, RoutedEventArgs e)
@@ -3291,11 +3375,9 @@ namespace WpfApp2
 
             if (meta.DataSource == "Db" || meta.ChartType == "RankList")
             {
-                contextMenu.Items.Add(new System.Windows.Controls.Separator());
-                var exportItem = new System.Windows.Controls.MenuItem { Header = "EXCEL  전체기간 내보내기" };
+                var exportItem = new System.Windows.Controls.MenuItem { Header = "EXCEL" };
                 exportItem.Click += async (s, ev) => await ExportFullDbDataAsync(meta);
                 contextMenu.Items.Add(exportItem);
-                contextMenu.Items.Add(new System.Windows.Controls.Separator());
             }
 
             contextMenu.Items.Add(deleteItem);
@@ -3466,31 +3548,43 @@ namespace WpfApp2
             return chart;
         }
 
-        // 막대 차트용: 정상/누락 값을 별도 시리즈로 분할 (누락 위치는 별도 빨간 막대)
-        private static (List<double> normal, List<double> missing, bool hasMissing) SplitMissingForBar(ChartMeta meta)
+        // 막대 차트용: 정상/누락/0원 값을 별도 시리즈로 분할
+        // 누락 위치는 빨간 막대, 0원 위치는 노란 막대로 표시 (둘 다 0높이 보정 마커)
+        private static (List<double> normal, List<double> missing, List<double> zero, bool hasMissing, bool hasZero)
+            SplitMissingForBar(ChartMeta meta)
         {
             var missing = meta.MissingIndices ?? new HashSet<int>();
+            var zero = meta.ZeroIndices ?? new HashSet<int>();
             double maxV = 0;
             for (int i = 0; i < meta.StaticData.Count; i++)
                 if (meta.StaticData[i] > maxV) maxV = meta.StaticData[i];
             double markerHeight = maxV > 0 ? maxV * 0.05 : 1; // 정상 최대값의 5% 또는 최소 1
 
-            var normalList = new List<double>(meta.StaticData.Count);
+            var normalList  = new List<double>(meta.StaticData.Count);
             var missingList = new List<double>(meta.StaticData.Count);
+            var zeroList    = new List<double>(meta.StaticData.Count);
             for (int i = 0; i < meta.StaticData.Count; i++)
             {
                 if (missing.Contains(i))
                 {
                     normalList.Add(0);
                     missingList.Add(markerHeight);
+                    zeroList.Add(0);
+                }
+                else if (zero.Contains(i))
+                {
+                    normalList.Add(0);
+                    missingList.Add(0);
+                    zeroList.Add(markerHeight);
                 }
                 else
                 {
                     normalList.Add(meta.StaticData[i]);
                     missingList.Add(0);
+                    zeroList.Add(0);
                 }
             }
-            return (normalList, missingList, missing.Count > 0);
+            return (normalList, missingList, zeroList, missing.Count > 0, zero.Count > 0);
         }
 
         private FrameworkElement CreateBarChart(ChartMeta meta)
@@ -3502,7 +3596,7 @@ namespace WpfApp2
             float axisSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 22f;
             float dlSize = meta.ChartLabelSize > 0 ? (float)meta.ChartLabelSize : 10f;
 
-            var (normalValues, missingValues, hasMissing) = SplitMissingForBar(meta);
+            var (normalValues, missingValues, zeroValues, hasMissing, hasZero) = SplitMissingForBar(meta);
 
             var seriesList = new List<ISeries>
             {
@@ -3528,6 +3622,19 @@ namespace WpfApp2
                 {
                     Values = missingValues,
                     Fill = new SolidColorPaint(new SKColor(0xE6, 0x55, 0x55, 0xC8)),
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = double.PositiveInfinity,
+                    DataLabelsPaint = null
+                });
+            }
+            if (hasZero)
+            {
+                seriesList.Add(new ColumnSeries<double>
+                {
+                    Values = zeroValues,
+                    Fill = new SolidColorPaint(new SKColor(0xF2, 0xB8, 0x3B, 0xC8)), // 노랑/주황 — 0원 매장
                     Stroke = null,
                     Rx = 3,
                     Ry = 3,
@@ -3583,19 +3690,32 @@ namespace WpfApp2
             var displayValues = meta.StaticData.AsEnumerable().Reverse().ToList();
             var displayLabels = meta.Labels.AsEnumerable().Reverse().ToList();
 
-            // 누락 인덱스도 역순으로 변환
+            // 누락/0원 인덱스도 역순으로 변환
             var missingOriginal = meta.MissingIndices ?? new HashSet<int>();
+            var zeroOriginal    = meta.ZeroIndices    ?? new HashSet<int>();
             int count = meta.StaticData.Count;
             var missingReversed = new HashSet<int>(missingOriginal.Select(idx => count - 1 - idx));
+            var zeroReversed    = new HashSet<int>(zeroOriginal.Select(idx => count - 1 - idx));
             double maxV = 0;
             for (int i = 0; i < count; i++) if (meta.StaticData[i] > maxV) maxV = meta.StaticData[i];
             double markerLen = maxV > 0 ? maxV * 0.05 : 1;
             var displayNormal  = new List<double>();
             var displayMissing = new List<double>();
+            var displayZero    = new List<double>();
             for (int i = 0; i < displayValues.Count; i++)
             {
-                if (missingReversed.Contains(i)) { displayNormal.Add(0); displayMissing.Add(markerLen); }
-                else { displayNormal.Add(displayValues[i]); displayMissing.Add(0); }
+                if (missingReversed.Contains(i))
+                {
+                    displayNormal.Add(0); displayMissing.Add(markerLen); displayZero.Add(0);
+                }
+                else if (zeroReversed.Contains(i))
+                {
+                    displayNormal.Add(0); displayMissing.Add(0); displayZero.Add(markerLen);
+                }
+                else
+                {
+                    displayNormal.Add(displayValues[i]); displayMissing.Add(0); displayZero.Add(0);
+                }
             }
 
             var tf = SKTypeface.FromFamilyName(meta.ChartFont);
@@ -3634,6 +3754,19 @@ namespace WpfApp2
                 {
                     Values = displayMissing,
                     Fill = new SolidColorPaint(new SKColor(0xE6, 0x55, 0x55, 0xC8)),
+                    Stroke = null,
+                    Rx = 3,
+                    Ry = 3,
+                    MaxBarWidth = 40,
+                    DataLabelsPaint = null
+                });
+            }
+            if (zeroReversed.Count > 0)
+            {
+                seriesListHBar.Add(new RowSeries<double>
+                {
+                    Values = displayZero,
+                    Fill = new SolidColorPaint(new SKColor(0xF2, 0xB8, 0x3B, 0xC8)), // 노랑/주황 — 0원 매장
                     Stroke = null,
                     Rx = 3,
                     Ry = 3,
@@ -3693,7 +3826,9 @@ namespace WpfApp2
 
             var list = new System.Windows.Controls.StackPanel();
 
-            for (int i = 0; i < meta.Labels.Count && i < meta.StaticData.Count; i++)
+            int maxItems = meta.RankListMaxItems > 0 ? meta.RankListMaxItems : int.MaxValue;
+            int limit = Math.Min(maxItems, Math.Min(meta.Labels.Count, meta.StaticData.Count));
+            for (int i = 0; i < limit; i++)
             {
                 var label = meta.Labels[i];
                 var value = meta.StaticData[i];
@@ -3708,8 +3843,22 @@ namespace WpfApp2
                 };
 
                 var rowGrid = new Grid();
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                // 순위 번호 (1. 2. …)
+                var rankBlock = new System.Windows.Controls.TextBlock
+                {
+                    Text = $"{idx + 1}.",
+                    FontSize = labelSize,
+                    FontFamily = new System.Windows.Media.FontFamily(meta.RankListLabelFont),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MinWidth = 28,
+                    Opacity = 0.7,
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                rankBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
 
                 var nameBlock = new System.Windows.Controls.TextBlock
                 {
@@ -3740,8 +3889,10 @@ namespace WpfApp2
                 else
                     valBlock.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "StatusBarBorderBrush");
 
-                Grid.SetColumn(nameBlock, 0);
-                Grid.SetColumn(valBlock, 1);
+                Grid.SetColumn(rankBlock, 0);
+                Grid.SetColumn(nameBlock, 1);
+                Grid.SetColumn(valBlock, 2);
+                rowGrid.Children.Add(rankBlock);
                 rowGrid.Children.Add(nameBlock);
                 rowGrid.Children.Add(valBlock);
                 row.Child = rowGrid;
@@ -3788,7 +3939,267 @@ namespace WpfApp2
                 VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
             };
+            // 별도 ContextMenu를 두지 않음 — 부모 Border의 통합 메뉴(차트 수정 / 새로고침 / EXCEL / 차트 삭제)가 그대로 뜸
             return sv;
+        }
+
+        // 순위표 차트 타이틀 우측에 표시되는 왕관 버튼 — 클릭 시 BEST/WORST 팝업
+        private System.Windows.Controls.Button MakeRankCrownButton(ChartMeta meta)
+        {
+            var btn = new System.Windows.Controls.Button
+            {
+                Content = "♚", // ♚ — 단색 글리프라 ForegroundBrush가 그대로 적용됨
+                Width = 26, Height = 22,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0, 0, 6, 0),
+                FontSize = 17,
+                FontWeight = FontWeights.Bold,
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "BEST / WORST",
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            btn.SetResourceReference(System.Windows.Controls.Button.ForegroundProperty, "ForegroundBrush");
+
+            var tpl = new System.Windows.Controls.ControlTemplate(typeof(System.Windows.Controls.Button));
+            var borderFef = new System.Windows.FrameworkElementFactory(typeof(Border));
+            borderFef.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            borderFef.SetValue(Border.BackgroundProperty, new System.Windows.TemplateBindingExtension(System.Windows.Controls.Button.BackgroundProperty));
+            var presenterFef = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
+            presenterFef.SetValue(ContentPresenter.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Center);
+            presenterFef.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            borderFef.AppendChild(presenterFef);
+            tpl.VisualTree = borderFef;
+            btn.Template = tpl;
+
+            // 호버 시 살짝 강조
+            btn.MouseEnter += (_, __) => btn.Background = (System.Windows.Application.Current.Resources["ContextMenuItemHoverBrush"] as System.Windows.Media.Brush) ?? System.Windows.Media.Brushes.Transparent;
+            btn.MouseLeave += (_, __) => btn.Background = System.Windows.Media.Brushes.Transparent;
+
+            btn.Click += (_, __) =>
+            {
+                var pos = System.Windows.Forms.Control.MousePosition;
+                ShowRankCrownPopup(meta, pos.X, pos.Y);
+            };
+            return btn;
+        }
+
+        // 왕관 버튼 클릭 시 표시되는 팝업.
+        // 위치 = 마우스 위치, 마우스가 팝업 밖으로 벗어나면 자동 닫힘.
+        // BEST와 WORST 두 섹션을 한 창에 표시 (순위, 매장명, 금액).
+        private void ShowRankCrownPopup(ChartMeta meta, int mouseX, int mouseY)
+        {
+            string cs = DatabaseService.DataConnectionString;
+            if (string.IsNullOrWhiteSpace(cs)) { System.Windows.MessageBox.Show("데이터 DB가 설정되지 않았습니다."); return; }
+
+            int count = meta.RankListBestWorstCount > 0 ? meta.RankListBestWorstCount : 5;
+            var groupBy = AllowedGroupByColumns.Contains(meta.DbGroupBy ?? "") ? meta.DbGroupBy! : "매장명";
+            var valueCol = AllowedValueColumns.Contains(meta.DbValueColumn ?? "") ? meta.DbValueColumn! : "총매출액";
+            var start = meta.DbStartDate ?? DateTime.Today.AddDays(-1);
+            var end   = meta.DbEndDate   ?? DateTime.Today.AddDays(-1);
+
+            // 전체 매장 수 조회 — WORST의 절대 순위 산정용 (예: 100개 중 96~100)
+            int totalCount = 0;
+            try
+            {
+                var countSql = $@"
+SELECT COUNT(*) FROM (
+    SELECT [{groupBy}]
+    FROM 매출데이터
+    WHERE 날짜 BETWEEN @start AND @end
+      AND (@store IS NULL OR 매장명 = @store)
+      AND (@middleCat IS NULL OR 중분류 = @middleCat)
+      AND (@menuName IS NULL OR 메뉴명 = @menuName)
+      AND [{groupBy}] IS NOT NULL AND [{groupBy}] <> ''
+    GROUP BY [{groupBy}]
+) AS t";
+                using var conn = new SqlConnection(cs);
+                conn.Open();
+                using var cmd = new SqlCommand(countSql, conn);
+                cmd.Parameters.AddWithValue("@start", start.Date);
+                cmd.Parameters.AddWithValue("@end", end.Date);
+                cmd.Parameters.AddWithValue("@store",     (object?)meta.DbStoreName            ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@middleCat", (object?)meta.DbMiddleCategoryFilter ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@menuName",  (object?)meta.DbMenuNameFilter       ?? DBNull.Value);
+                var r = cmd.ExecuteScalar();
+                if (r != null && r != DBNull.Value) totalCount = Convert.ToInt32(r);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CrownPopup/count] {ex.Message}"); }
+
+            List<(string Name, double Value)> FetchTopN(string sortDir)
+            {
+                var rows = new List<(string, double)>();
+                try
+                {
+                    var sql = $@"
+SELECT TOP (@cnt) [{groupBy}], SUM([{valueCol}]) AS 값
+FROM 매출데이터
+WHERE 날짜 BETWEEN @start AND @end
+  AND (@store IS NULL OR 매장명 = @store)
+  AND (@middleCat IS NULL OR 중분류 = @middleCat)
+  AND (@menuName IS NULL OR 메뉴명 = @menuName)
+  AND [{groupBy}] IS NOT NULL AND [{groupBy}] <> ''
+GROUP BY [{groupBy}]
+ORDER BY 값 {sortDir}";
+                    using var conn = new SqlConnection(cs);
+                    conn.Open();
+                    using var cmd = new SqlCommand(sql, conn);
+                    cmd.Parameters.AddWithValue("@cnt", count);
+                    cmd.Parameters.AddWithValue("@start", start.Date);
+                    cmd.Parameters.AddWithValue("@end", end.Date);
+                    cmd.Parameters.AddWithValue("@store",     (object?)meta.DbStoreName            ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@middleCat", (object?)meta.DbMiddleCategoryFilter ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@menuName",  (object?)meta.DbMenuNameFilter       ?? DBNull.Value);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var name = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                        var val  = reader.IsDBNull(1) ? 0  : Convert.ToDouble(reader.GetValue(1));
+                        rows.Add((name, val));
+                    }
+                }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CrownPopup/{sortDir}] {ex.Message}"); }
+                return rows;
+            }
+
+            var best  = FetchTopN("DESC");
+            var worstRaw = FetchTopN("ASC"); // 가장 낮은 순부터: rank N, N-1, …
+            // 표시는 "전체 순위" 오름차순 (예: 100개 매장, WORST 5개 → 96, 97, 98, 99, 100)
+            worstRaw.Reverse();
+            var worst = worstRaw;
+
+            // 팝업 창
+            var dlg = new System.Windows.Window
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Title = "BEST / WORST",
+                SizeToContent = SizeToContent.WidthAndHeight,
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                ResizeMode = ResizeMode.NoResize,
+                Background = System.Windows.Media.Brushes.Transparent,
+                ShowInTaskbar = false,
+                Topmost = true
+            };
+
+            var outerBorder = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12, 10, 12, 10)
+            };
+            outerBorder.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
+            outerBorder.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+
+            // BEST(위) / WORST(아래) 세로 배치
+            var vstack = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Vertical };
+
+            System.Windows.Controls.StackPanel BuildSection(string title, List<(string Name, double Value)> rows, int startRank, System.Windows.Media.Color accent)
+            {
+                var col = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 0, 0, 0) };
+                var hdr = new System.Windows.Controls.TextBlock
+                {
+                    Text = title,
+                    FontSize = 12,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new System.Windows.Media.SolidColorBrush(accent),
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+                col.Children.Add(hdr);
+
+                if (rows.Count == 0)
+                {
+                    var empty = new System.Windows.Controls.TextBlock { Text = "데이터 없음", Opacity = 0.55, FontSize = 11 };
+                    empty.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    col.Children.Add(empty);
+                    return col;
+                }
+
+                var inner = new Grid();
+                inner.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 140 });
+                inner.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                for (int i = 0; i < rows.Count; i++) inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    int absoluteRank = startRank + i;
+                    var rTxt = new System.Windows.Controls.TextBlock { Text = $"{absoluteRank}.", FontSize = 12, MinWidth = 32, Margin = new Thickness(0, 1, 10, 1), Opacity = 0.7 };
+                    var nTxt = new System.Windows.Controls.TextBlock { Text = rows[i].Name, FontSize = 12, Margin = new Thickness(0, 1, 12, 1), TextTrimming = TextTrimming.CharacterEllipsis };
+                    var aTxt = new System.Windows.Controls.TextBlock { Text = rows[i].Value.ToString("N0") + "원", FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 1, 0, 1), TextAlignment = TextAlignment.Right };
+                    rTxt.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    nTxt.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    aTxt.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    Grid.SetRow(rTxt, i); Grid.SetColumn(rTxt, 0); inner.Children.Add(rTxt);
+                    Grid.SetRow(nTxt, i); Grid.SetColumn(nTxt, 1); inner.Children.Add(nTxt);
+                    Grid.SetRow(aTxt, i); Grid.SetColumn(aTxt, 2); inner.Children.Add(aTxt);
+                }
+                col.Children.Add(inner);
+                return col;
+            }
+
+            // BEST = 1위부터, WORST = (전체-WORST개수+1)위부터 — 매장 N개 중 N-k+1 ~ N
+            int worstStart = totalCount > 0
+                ? Math.Max(1, totalCount - worst.Count + 1)
+                : best.Count + 1; // 전체 수 조회 실패 시 추정치
+
+            var bestPanel  = BuildSection("BEST",  best,  startRank: 1,          accent: System.Windows.Media.Color.FromRgb(0x4C, 0xC0, 0x70));
+            var worstPanel = BuildSection("WORST", worst, startRank: worstStart, accent: System.Windows.Media.Color.FromRgb(0xE0, 0x5A, 0x5A));
+            worstPanel.Margin = new Thickness(0, 12, 0, 0);
+
+            vstack.Children.Add(bestPanel);
+
+            // BEST와 WORST 사이에 가는 구분선
+            var divider = new System.Windows.Shapes.Rectangle { Height = 1, Margin = new Thickness(0, 10, 0, 0) };
+            divider.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "StatusBarBorderBrush");
+            vstack.Children.Add(divider);
+
+            vstack.Children.Add(worstPanel);
+
+            outerBorder.Child = vstack;
+            dlg.Content = outerBorder;
+
+            // 마우스 위치 근처에 표시 — 화면 밖으로 나가지 않도록 보정
+            dlg.SourceInitialized += (_, __) =>
+            {
+                double w = dlg.ActualWidth > 0 ? dlg.ActualWidth : 380;
+                double h = dlg.ActualHeight > 0 ? dlg.ActualHeight : 200;
+                double left = mouseX - w / 2.0;
+                double top  = mouseY + 10;
+                var screen = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(mouseX, mouseY)).WorkingArea;
+                if (left < screen.Left) left = screen.Left + 4;
+                if (top  + h > screen.Bottom) top = mouseY - h - 10;
+                if (left + w > screen.Right) left = screen.Right - w - 4;
+                if (top  < screen.Top) top = screen.Top + 4;
+                dlg.Left = left;
+                dlg.Top  = top;
+            };
+
+            // 마우스가 팝업 영역을 벗어나면 자동 닫힘 (DispatcherTimer 폴링)
+            var watchTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            bool firstEntered = false;
+            watchTimer.Tick += (_, __) =>
+            {
+                try
+                {
+                    var rc = GetWindowScreenRect(dlg);
+                    var pos = System.Windows.Forms.Control.MousePosition;
+                    bool inside = !rc.IsEmpty && rc.Contains(pos);
+                    if (!firstEntered)
+                    {
+                        if (inside) firstEntered = true;
+                        return; // 처음에는 마우스가 들어올 때까지 닫지 않음
+                    }
+                    if (!inside) { watchTimer.Stop(); dlg.Close(); }
+                }
+                catch { watchTimer.Stop(); try { dlg.Close(); } catch { } }
+            };
+            dlg.Closed += (_, __) => watchTimer.Stop();
+            dlg.Loaded += (_, __) => watchTimer.Start();
+
+            dlg.Show();
         }
 
         private void ShowRankDetailWindow(string groupValue, ChartMeta meta)
@@ -4835,6 +5246,7 @@ ORDER BY 날짜 DESC";
                 System.Windows.Controls.ComboBox? eFontCombo = null, eSizeCombo = null;
                 System.Windows.Controls.ComboBox? rankLabelFontCombo = null, rankLabelSizeCombo = null;
                 System.Windows.Controls.ComboBox? rankValueFontCombo = null, rankValueSizeCombo = null;
+                System.Windows.Controls.TextBox? rankMaxItemsBox = null, rankBestWorstBox = null;
                 System.Windows.Controls.CheckBox? dbShowBarsCheck = null;
                 string? chosenLabelColorHex = meta.RankListLabelColor;
                 string? chosenValueColorHex = meta.RankListValueColor;
@@ -4983,6 +5395,39 @@ ORDER BY 날짜 DESC";
                         Margin = new Thickness(0, 0, 0, 8), Background = cardBg, Child = rlCardInner
                     };
                     mainStack.Children.Add(rlCard);
+
+                    // 표시 개수 / BEST·WORST 개수 카드
+                    rankMaxItemsBox = new System.Windows.Controls.TextBox
+                    {
+                        Text = (meta.RankListMaxItems > 0 ? meta.RankListMaxItems : 10).ToString(),
+                        Width = 60, HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center
+                    };
+                    rankMaxItemsBox.SetResourceReference(System.Windows.Controls.TextBox.ForegroundProperty, "ForegroundBrush");
+                    rankBestWorstBox = new System.Windows.Controls.TextBox
+                    {
+                        Text = (meta.RankListBestWorstCount > 0 ? meta.RankListBestWorstCount : 5).ToString(),
+                        Width = 60, HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center
+                    };
+                    rankBestWorstBox.SetResourceReference(System.Windows.Controls.TextBox.ForegroundProperty, "ForegroundBrush");
+
+                    var countsBody = new System.Windows.Controls.StackPanel();
+                    countsBody.Children.Add(LRow("순위표 표시 개수", rankMaxItemsBox, 130));
+                    countsBody.Children.Add(LRow("BEST/WORST 개수", rankBestWorstBox, 130));
+                    var countsHdr = new System.Windows.Controls.TextBlock
+                    {
+                        Text = "표시 옵션", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 10), Opacity = 0.55
+                    };
+                    countsHdr.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ForegroundBrush");
+                    var countsInner = new System.Windows.Controls.StackPanel();
+                    countsInner.Children.Add(countsHdr);
+                    countsInner.Children.Add(countsBody);
+                    var countsCard = new Border
+                    {
+                        CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 12, 14, 8),
+                        Margin = new Thickness(0, 0, 0, 8), Background = cardBg, Child = countsInner
+                    };
+                    mainStack.Children.Add(countsCard);
                 }
                 else
                 {
@@ -5021,6 +5466,8 @@ ORDER BY 날짜 DESC";
                     if (rankValueFontCombo != null) meta.RankListValueFont = rankValueFontCombo.SelectedItem?.ToString() ?? "Malgun Gothic";
                     if (rankValueSizeCombo != null) meta.RankListValueSize = rankValueSizeCombo.SelectedItem?.ToString() is string vs && double.TryParse(vs, out var vd) ? vd : 13;
                     if (meta.ChartType == "RankList") { meta.RankListLabelColor = chosenLabelColorHex; meta.RankListValueColor = chosenValueColorHex; }
+                    if (rankMaxItemsBox != null && int.TryParse(rankMaxItemsBox.Text, out var rmi) && rmi > 0) meta.RankListMaxItems = rmi;
+                    if (rankBestWorstBox != null && int.TryParse(rankBestWorstBox.Text, out var rbw) && rbw > 0) meta.RankListBestWorstCount = rbw;
                     try { LoadDbData(meta); } catch (Exception ex2) { System.Diagnostics.Debug.WriteLine($"[LoadDbData] {ex2.Message}"); }
                     FrameworkElement? nc2 = null;
                     switch (meta.ChartType)
@@ -5275,8 +5722,14 @@ ORDER BY 날짜 DESC";
             var end = meta.DbEndDate ?? DateTime.Today.AddDays(-1);
             var sortDir = meta.DbSortAscending ? "ASC" : "DESC";
 
+            // 순위표는 사용자가 설정한 표시 개수를 따르고, 그 외 차트는 기본 50개 제한.
+            // 안전 상한 5000 — 너무 큰 값으로 인한 메모리/렌더링 부담 방지.
+            int topN = 50;
+            if (meta.ChartType == "RankList" && meta.RankListMaxItems > 0)
+                topN = Math.Min(meta.RankListMaxItems, 5000);
+
             var sql = $@"
-SELECT TOP 50 [{groupBy}], SUM([{valueCol}]) AS 값
+SELECT TOP ({topN}) [{groupBy}], SUM([{valueCol}]) AS 값
 FROM 매출데이터
 WHERE 날짜 BETWEEN @start AND @end
   AND (@store IS NULL OR 매장명 = @store)
@@ -5289,6 +5742,7 @@ ORDER BY 값 {sortDir}";
             var labels = new List<string>();
             var values = new List<double>();
             var missing = new HashSet<int>();
+            var zero = new HashSet<int>();
 
             using (var conn = new SqlConnection(cs))
             {
@@ -5307,10 +5761,17 @@ ORDER BY 값 {sortDir}";
                 }
             }
 
-            // 매장명으로 그룹화할 때만 누락 매장을 차트에 추가 (중분류/메뉴명 그룹엔 무의미)
-            // 매장 필터가 걸려있지 않을 때만 적용
-            if (groupBy == "매장명" && string.IsNullOrEmpty(meta.DbStoreName))
+            // 매장명으로 그룹화 + 매장 필터 없음 + 매출액 기준일 때만 누락/0원 매장 표시
+            bool annotateStores = groupBy == "매장명" && string.IsNullOrEmpty(meta.DbStoreName);
+            if (annotateStores)
             {
+                // 메인 결과 중 값이 0인 매장은 0원으로 마크 (매출데이터에 행은 있지만 합이 0)
+                for (int i = 0; i < values.Count; i++)
+                    if (values[i] == 0) zero.Add(i);
+
+                var existing = new HashSet<string>(labels, StringComparer.OrdinalIgnoreCase);
+
+                // 누락 매장 추가
                 try
                 {
                     const string skippedSql = @"
@@ -5323,12 +5784,11 @@ ORDER BY 값 {sortDir}";
                     cmd2.Parameters.AddWithValue("@start", start.Date);
                     cmd2.Parameters.AddWithValue("@end", end.Date);
                     using var reader2 = cmd2.ExecuteReader();
-                    var existing = new HashSet<string>(labels, StringComparer.OrdinalIgnoreCase);
                     while (reader2.Read())
                     {
                         var name = reader2.IsDBNull(0) ? "" : reader2.GetString(0);
                         if (string.IsNullOrEmpty(name)) continue;
-                        if (existing.Contains(name)) continue; // 이미 매출데이터에 있음
+                        if (existing.Contains(name)) continue;
                         labels.Add(name);
                         values.Add(0);
                         missing.Add(labels.Count - 1);
@@ -5336,11 +5796,39 @@ ORDER BY 값 {sortDir}";
                     }
                 }
                 catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData/skipped] {ex.Message}"); }
+
+                // 0원 매장도 추가 (메인 쿼리의 TOP 50에서 빠졌을 수 있음)
+                try
+                {
+                    const string zeroSql = @"
+                        SELECT DISTINCT StoreName FROM StoreSales
+                        WHERE SaleDate BETWEEN @start AND @end
+                          AND TotalAmount = 0
+                          AND StoreName IS NOT NULL AND StoreName <> ''";
+                    using var conn3 = new SqlConnection(cs);
+                    conn3.Open();
+                    using var cmd3 = new SqlCommand(zeroSql, conn3);
+                    cmd3.Parameters.AddWithValue("@start", start.Date);
+                    cmd3.Parameters.AddWithValue("@end", end.Date);
+                    using var reader3 = cmd3.ExecuteReader();
+                    while (reader3.Read())
+                    {
+                        var name = reader3.IsDBNull(0) ? "" : reader3.GetString(0);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (existing.Contains(name)) continue; // 이미 위에서 처리됨
+                        labels.Add(name);
+                        values.Add(0);
+                        zero.Add(labels.Count - 1);
+                        existing.Add(name);
+                    }
+                }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[LoadDbData/zero] {ex.Message}"); }
             }
 
             meta.Labels = labels;
             meta.StaticData = values;
             meta.MissingIndices = missing;
+            meta.ZeroIndices = zero;
         }
 
         private FrameworkElement WrapWithDbDates(FrameworkElement chartControl, ChartMeta meta)
@@ -5377,6 +5865,14 @@ ORDER BY 값 {sortDir}";
             var titlePanel = new Grid { Background = System.Windows.Media.Brushes.Transparent };
             titlePanel.Children.Add(titleHint);
             titlePanel.Children.Add(titleBlock);
+
+            // 순위표일 때만 우측에 왕관 버튼 표시
+            if (meta.ChartType == "RankList")
+            {
+                var crownBtn = MakeRankCrownButton(meta);
+                titlePanel.Children.Add(crownBtn);
+            }
+
             Grid.SetRow(titlePanel, 0);
             outerGrid.Children.Add(titlePanel);
 
@@ -5886,7 +6382,9 @@ ORDER BY 값 {sortDir}";
                             RankListValueColor = meta.RankListValueColor,
                             RankListColumnWidths = meta.RankListColumnWidths,
                             RankListColumnOrder = meta.RankListColumnOrder,
-                            RankListColumnAlignments = meta.RankListColumnAlignments
+                            RankListColumnAlignments = meta.RankListColumnAlignments,
+                            RankListMaxItems = meta.RankListMaxItems,
+                            RankListBestWorstCount = meta.RankListBestWorstCount
                         };
                         allCharts.Add(chartData);
                     }
@@ -5943,7 +6441,9 @@ ORDER BY 값 {sortDir}";
                         RankListLabelColor = chartData.ContainsKey("RankListLabelColor") ? chartData["RankListLabelColor"]?.ToString() : null,
                         RankListValueFont = chartData.ContainsKey("RankListValueFont") && chartData["RankListValueFont"] != null ? chartData["RankListValueFont"].ToString() : "Malgun Gothic",
                         RankListValueSize = chartData.ContainsKey("RankListValueSize") ? Convert.ToDouble(chartData["RankListValueSize"]) : 13,
-                        RankListValueColor = chartData.ContainsKey("RankListValueColor") ? chartData["RankListValueColor"]?.ToString() : null
+                        RankListValueColor = chartData.ContainsKey("RankListValueColor") ? chartData["RankListValueColor"]?.ToString() : null,
+                        RankListMaxItems = chartData.ContainsKey("RankListMaxItems") ? Convert.ToInt32(chartData["RankListMaxItems"]) : 10,
+                        RankListBestWorstCount = chartData.ContainsKey("RankListBestWorstCount") ? Convert.ToInt32(chartData["RankListBestWorstCount"]) : 5
                     };
 
                     // StaticData 복원
@@ -6047,6 +6547,12 @@ ORDER BY 값 {sortDir}";
 
                     contextMenu.Items.Add(editItem);
                     contextMenu.Items.Add(refreshItem);
+                    if (meta.DataSource == "Db" || meta.ChartType == "RankList")
+                    {
+                        var exportItem = new System.Windows.Controls.MenuItem { Header = "EXCEL" };
+                        exportItem.Click += async (s, ev) => await ExportFullDbDataAsync(meta);
+                        contextMenu.Items.Add(exportItem);
+                    }
                     contextMenu.Items.Add(deleteItem);
                     border.ContextMenu = contextMenu;
 

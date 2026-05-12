@@ -111,6 +111,7 @@
     <Compile Include="RecordedAction.cs" />
     <Compile Include="SalesData.cs" />
     <Compile Include="StoreMappingService.cs" />
+    <Compile Include="ThemeManager.cs" />
     <Compile Include="TopintApiClient.cs" />
     <Compile Include="WebScraper.cs" />
     <Page Include="AccountSelectionDialog.xaml">

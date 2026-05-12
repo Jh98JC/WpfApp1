@@ -136,6 +136,30 @@ namespace 대진포스_쿼리
             return savedRows;
         }
 
+        /// <summary>SkippedStores 테이블에 누락 매장 기록 (중복 무시)</summary>
+        public static void AddSkippedStore(DateTime date, string storeName, string reason)
+        {
+            if (!IsConfigured || string.IsNullOrWhiteSpace(storeName)) return;
+            try
+            {
+                const string sql = @"
+                    IF NOT EXISTS (SELECT 1 FROM SkippedStores WHERE CollectionDate = @date AND StoreName = @store)
+                        INSERT INTO SkippedStores (CollectionDate, StoreName, Reason) VALUES (@date, @store, @reason)";
+                using (var conn = new SqlConnection(ConnectionString))
+                {
+                    conn.Open();
+                    using (var cmd = new SqlCommand(sql, conn))
+                    {
+                        cmd.Parameters.Add("@date",   SqlDbType.Date).Value           = date.Date;
+                        cmd.Parameters.Add("@store",  SqlDbType.NVarChar, 100).Value  = storeName;
+                        cmd.Parameters.Add("@reason", SqlDbType.NVarChar, 500).Value  = (object)reason ?? DBNull.Value;
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+            catch { }
+        }
+
         /// <summary>연결 테스트</summary>
         public static bool TestConnection(out string errorMessage)
         {

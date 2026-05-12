@@ -67,17 +67,279 @@ namespace 대진포스_쿼리
                 Top  = -32000;
                 ShowInTaskbar = false;
                 Loaded += AutoModeStartup;
-
-                // 부모(WpfApp2)의 '보기' 버튼 신호를 명명된 이벤트로 수신.
-                // 이름 규칙: "DaejinPosShow_{현재 PID}" — 부모는 자식 PID를 알고 있으므로 매칭.
-                StartShowSignalWorker();
             }
+            else
+            {
+                // 사용자 모드(수동실행) — 부모가 전달한 좌표/크기에 맞춰 표시.
+                ApplyStartGeometry();
+                ShowInTaskbar = false; // 부모 종속이므로 작업표시줄에 노출하지 않음
+            }
+
+            // 부모(WpfApp2)의 '보기'/'수동실행 재호출' 신호 수신 (자동/사용자 모드 공통)
+            StartShowSignalWorker();
+
+            // 부모 윈도우와 같이 가려지도록 소유 관계 설정
+            SourceInitialized += MainWindow_SourceInitialized;
 
             Closed += (_, __) =>
             {
                 try { _showCts?.Cancel(); } catch { }
                 try { _showSignal?.Dispose(); } catch { }
             };
+        }
+
+        // SetWindowLong용 P/Invoke — 부모 HWND에 종속(GWL_HWNDPARENT)되도록 한다.
+        private const int GWL_HWNDPARENT = -8;
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+        private static IntPtr SetParentHwnd(IntPtr hWnd, IntPtr newParent)
+        {
+            if (IntPtr.Size == 8) return SetWindowLongPtr64(hWnd, GWL_HWNDPARENT, newParent);
+            return new IntPtr(SetWindowLong32(hWnd, GWL_HWNDPARENT, newParent.ToInt32()));
+        }
+
+        private void MainWindow_SourceInitialized(object sender, EventArgs e)
+        {
+            try
+            {
+                if (App.ParentHwnd == IntPtr.Zero) return;
+                var helper = new System.Windows.Interop.WindowInteropHelper(this);
+                if (helper.Handle != IntPtr.Zero)
+                    SetParentHwnd(helper.Handle, App.ParentHwnd);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[SetOwner] {ex.Message}"); }
+        }
+
+        // 부모(WpfApp2)가 CLI 인자(--x/--y/--width/--height)로 전달한 위치/크기를 적용.
+        private void ApplyStartGeometry()
+        {
+            try
+            {
+                if (App.StartW.HasValue && App.StartW.Value > 50) Width = App.StartW.Value;
+                if (App.StartH.HasValue && App.StartH.Value > 50) Height = App.StartH.Value;
+                if (App.StartX.HasValue || App.StartY.HasValue)
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual;
+                    if (App.StartX.HasValue) Left = App.StartX.Value;
+                    if (App.StartY.HasValue) Top  = App.StartY.Value;
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ApplyStartGeometry] {ex.Message}"); }
+        }
+
+        // 보기 토글 시 부모가 미리 저장한 표시 좌표를 읽는다.
+        // 형식: 한 줄에 'x=..\ny=..\nwidth=..\nheight=..'
+        private static (double? x, double? y, double? w, double? h) ReadShowGeometry()
+        {
+            try
+            {
+                string path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "WpfApp2", "pos_show_geom.txt");
+                if (!System.IO.File.Exists(path)) return (null, null, null, null);
+                double? x = null, y = null, w = null, h = null;
+                foreach (var line in System.IO.File.ReadAllLines(path))
+                {
+                    int i = line.IndexOf('=');
+                    if (i <= 0) continue;
+                    var k = line.Substring(0, i).Trim();
+                    var v = line.Substring(i + 1).Trim();
+                    if (!double.TryParse(v, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var d)) continue;
+                    switch (k)
+                    {
+                        case "x": x = d; break;
+                        case "y": y = d; break;
+                        case "width":  w = d; break;
+                        case "height": h = d; break;
+                    }
+                }
+                return (x, y, w, h);
+            }
+            catch { return (null, null, null, null); }
+        }
+
+        // 제목표시줄 제거 — 콘텐츠 상단 영역을 드래그용 핸들로 사용
+        private void TitleArea_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            try { if (e.ChangedButton == System.Windows.Input.MouseButton.Left) DragMove(); } catch { }
+        }
+
+        // 자동 모드면 숨김(OnClosing이 가로채서 다시 화면 밖으로 이동), 사용자 모드면 정상 종료
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.AutoMode) HideToBackground();
+            else Close();
+        }
+
+        // 추출 버튼용 — 부모(대진포스 쿼리 창) 중앙에 테마 색상으로 떠 있는 날짜 선택 다이얼로그.
+        // (date, confirmed) 튜플 반환.
+        private (DateTime? date, bool ok) ShowThemedDateDialog()
+        {
+            var yesterday = DateTime.Today.AddDays(-1);
+
+            var dlg = new Window
+            {
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Width = 360,
+                Height = 220,
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                ResizeMode = ResizeMode.NoResize,
+                Background = System.Windows.Media.Brushes.Transparent,
+                ShowInTaskbar = false
+            };
+            dlg.SetResourceReference(Window.ForegroundProperty, "ForegroundBrush");
+
+            // 외곽 보더 (라운드 + 테마 색상)
+            var outer = new Border
+            {
+                CornerRadius = new CornerRadius(12),
+                BorderThickness = new Thickness(1)
+            };
+            outer.SetResourceReference(Border.BackgroundProperty,  "WindowBackgroundBrush");
+            outer.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+
+            var grid = new Grid { Margin = new Thickness(18, 14, 18, 16) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            // 헤더(드래그 + 닫기)
+            var header = new Grid();
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var title = new TextBlock
+            {
+                Text = "추출 날짜 선택",
+                FontWeight = FontWeights.Bold,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(2, 0, 0, 0)
+            };
+            title.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundBrush");
+
+            // 드래그용 호스트 (title을 자식으로 1번만 등록)
+            var dragHost = new Border
+            {
+                Background = System.Windows.Media.Brushes.Transparent,
+                Height = 26,
+                Child = title
+            };
+            dragHost.MouseLeftButtonDown += (s, ev) => { try { if (ev.ChangedButton == MouseButton.Left) dlg.DragMove(); } catch { } };
+            Grid.SetColumn(dragHost, 0);
+            header.Children.Add(dragHost);
+
+            var closeBtn = new Button
+            {
+                Content = "✕",
+                Width = 26, Height = 26,
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                FontSize = 13,
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            closeBtn.SetResourceReference(Button.ForegroundProperty, "TabTextNormalBrush");
+            closeBtn.Click += (s, ev) => dlg.Close();
+            Grid.SetColumn(closeBtn, 1);
+            header.Children.Add(closeBtn);
+
+            Grid.SetRow(header, 0);
+            grid.Children.Add(header);
+
+            // 날짜 선택 라인
+            var datePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 10) };
+            var label = new TextBlock { Text = "날짜:", Width = 50, VerticalAlignment = VerticalAlignment.Center, FontSize = 12 };
+            label.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundBrush");
+            datePanel.Children.Add(label);
+            var picker = new DatePicker
+            {
+                Width = 220,
+                SelectedDate = yesterday,
+                DisplayDateEnd = yesterday,
+                FontSize = 12
+            };
+            picker.SetResourceReference(DatePicker.ForegroundProperty, "ForegroundBrush");
+            picker.SetResourceReference(DatePicker.BackgroundProperty, "StatusBarBackgroundBrush");
+            picker.SetResourceReference(DatePicker.BorderBrushProperty, "StatusBarBorderBrush");
+            datePanel.Children.Add(picker);
+            Grid.SetRow(datePanel, 1);
+            grid.Children.Add(datePanel);
+
+            // 안내문
+            var info = new TextBlock
+            {
+                Text = "확인 시 junco + junco3 동시 수집 후 통합 파일을 생성합니다.",
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 0)
+            };
+            info.SetResourceReference(TextBlock.ForegroundProperty, "TabTextNormalBrush");
+            Grid.SetRow(info, 2);
+            grid.Children.Add(info);
+
+            // 버튼 패널
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            var okBtn = MakeThemedButton("확인", isPrimary: true);
+            var cancelBtn = MakeThemedButton("취소", isPrimary: false);
+            okBtn.Margin = new Thickness(0, 0, 8, 0);
+            bool confirmed = false;
+            okBtn.Click += (s, ev) => { confirmed = true; dlg.Close(); };
+            cancelBtn.Click += (s, ev) => dlg.Close();
+            buttons.Children.Add(okBtn);
+            buttons.Children.Add(cancelBtn);
+            Grid.SetRow(buttons, 3);
+            grid.Children.Add(buttons);
+
+            outer.Child = grid;
+            dlg.Content = outer;
+            dlg.ShowDialog();
+
+            return (picker.SelectedDate, confirmed && picker.SelectedDate.HasValue);
+        }
+
+        private Button MakeThemedButton(string text, bool isPrimary)
+        {
+            var btn = new Button
+            {
+                Content = text,
+                Width = 78,
+                Height = 30,
+                FontSize = 12,
+                FontWeight = isPrimary ? FontWeights.Bold : FontWeights.Normal,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                BorderThickness = new Thickness(1)
+            };
+            if (isPrimary)
+            {
+                btn.SetResourceReference(Button.BackgroundProperty, "SuccessBrush");
+                btn.Foreground = System.Windows.Media.Brushes.White;
+            }
+            else
+            {
+                btn.SetResourceReference(Button.BackgroundProperty, "StatusBarBackgroundBrush");
+                btn.SetResourceReference(Button.ForegroundProperty, "ForegroundBrush");
+            }
+            btn.SetResourceReference(Button.BorderBrushProperty, "StatusBarBorderBrush");
+            // 라운드 템플릿
+            var tpl = new System.Windows.Controls.ControlTemplate(typeof(Button));
+            var borderFef = new System.Windows.FrameworkElementFactory(typeof(Border));
+            borderFef.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            borderFef.SetValue(Border.BackgroundProperty, new System.Windows.TemplateBindingExtension(Button.BackgroundProperty));
+            borderFef.SetValue(Border.BorderBrushProperty, new System.Windows.TemplateBindingExtension(Button.BorderBrushProperty));
+            borderFef.SetValue(Border.BorderThicknessProperty, new System.Windows.TemplateBindingExtension(Button.BorderThicknessProperty));
+            var presenterFef = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
+            presenterFef.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenterFef.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            borderFef.AppendChild(presenterFef);
+            tpl.VisualTree = borderFef;
+            btn.Template = tpl;
+            return btn;
         }
 
         private System.Threading.EventWaitHandle _showSignal;
@@ -133,11 +395,14 @@ namespace 대진포스_쿼리
         {
             try
             {
-                double w = 1100, h = 720;
-                Width = w;
-                Height = h;
-                Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth  - w) / 2);
-                Top  = Math.Max(0, (SystemParameters.PrimaryScreenHeight - h) / 2);
+                // 부모가 보낸 좌표/크기를 우선 사용. 없으면 폴백으로 화면 중앙.
+                var (x, y, w, h) = ReadShowGeometry();
+                double width  = (w.HasValue && w.Value > 50)  ? w.Value : 1100;
+                double height = (h.HasValue && h.Value > 50)  ? h.Value : 720;
+                Width = width;
+                Height = height;
+                Left = x ?? Math.Max(0, (SystemParameters.PrimaryScreenWidth  - width)  / 2);
+                Top  = y ?? Math.Max(0, (SystemParameters.PrimaryScreenHeight - height) / 2);
                 if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
                 // ShowInTaskbar는 변경하지 않음 — 변경 시 WPF가 HWND를 재생성해 WebView2가 깨질 수 있음.
                 Topmost = true;
@@ -671,74 +936,14 @@ namespace 대진포스_쿼리
                 }
                 else
                 {
-                    // 1단계: 날짜 입력 (하루만 사용)
-                    var dateDialog = new Window
-                    {
-                        Title = "날짜 설정",
-                        Width = 380,
-                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                        ResizeMode = ResizeMode.NoResize,
-                        SizeToContent = SizeToContent.Height
-                    };
-
-                    var grid = new Grid();
-                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                    grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
-                    grid.Margin = new Thickness(20, 15, 20, 15);
-
-                    var titleText = new TextBlock
-                    {
-                        Text = "🚀 자동 수집할 날짜를 선택하세요",
-                        FontSize = 14,
-                        FontWeight = FontWeights.Bold,
-                        Margin = new Thickness(0, 0, 0, 15)
-                    };
-                    Grid.SetRow(titleText, 0);
-                    grid.Children.Add(titleText);
-
-                    var datePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 5) };
-                    datePanel.Children.Add(new TextBlock { Text = "날짜:", Width = 60, VerticalAlignment = VerticalAlignment.Center });
-                    var yesterday = DateTime.Today.AddDays(-1);
-                    var startDatePicker = new DatePicker { Width = 200, SelectedDate = yesterday, DisplayDateEnd = yesterday };
-                    datePanel.Children.Add(startDatePicker);
-                    Grid.SetRow(datePanel, 1);
-                    grid.Children.Add(datePanel);
-
-                    var infoText = new TextBlock
-                    {
-                        Text = "⚡ 확인을 누르면 자동으로:\n   junco + junco3 동시 수집 → 통합 파일 생성",
-                        FontSize = 11,
-                        Foreground = System.Windows.Media.Brushes.DarkBlue,
-                        Margin = new Thickness(0, 10, 0, 10)
-                    };
-                    Grid.SetRow(infoText, 2);
-                    grid.Children.Add(infoText);
-
-                    var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 15, 0, 0) };
-                    var okButton = new Button { Content = "확인", Width = 90, Height = 35, Margin = new Thickness(0, 0, 10, 0), FontSize = 13, FontWeight = FontWeights.Bold };
-                    var cancelButton = new Button { Content = "취소", Width = 90, Height = 35, FontSize = 13 };
-
-                    bool dialogOk = false;
-                    okButton.Click += (s, ev) => { dialogOk = true; dateDialog.Close(); };
-                    cancelButton.Click += (s, ev) => { dateDialog.Close(); };
-
-                    buttonPanel.Children.Add(okButton);
-                    buttonPanel.Children.Add(cancelButton);
-                    Grid.SetRow(buttonPanel, 3);
-                    grid.Children.Add(buttonPanel);
-
-                    dateDialog.Content = grid;
-                    dateDialog.ShowDialog();
-
-                    if (!dialogOk || !startDatePicker.SelectedDate.HasValue)
+                    // 1단계: 날짜 입력 — 부모(대진포스 쿼리) 창 중앙에 테마 색상으로 표시
+                    var (picked, ok) = ShowThemedDateDialog();
+                    if (!ok || !picked.HasValue)
                     {
                         StatusText.Text = "작업 취소됨";
                         return;
                     }
-
-                    currentDate = startDatePicker.SelectedDate.Value;
+                    currentDate = picked.Value;
                 }
 
                 string currentDateStr = currentDate.ToString("yyyyMMdd");
@@ -2085,6 +2290,7 @@ namespace 대진포스_쿼리
                     bool storeDataLoaded = false;
                     int storeRowCount = 0;
                     int maxRetries = 3; // 매장 반응 없을 시 최대 3회 재클릭 (사용자 설정: 1회 5초 → 3회 2초)
+                    bool sch02AbsentDetected = false;
 
                     for (int retryCount = 0; retryCount < maxRetries && !storeDataLoaded; retryCount++)
                     {
@@ -2117,6 +2323,7 @@ namespace 대진포스_쿼리
                         string checkDataScript = $@"
                             (function() {{
                                 var iframes = document.querySelectorAll('iframe');
+                                var visibleIframeFound = false;
                                 for (var i = 0; i < iframes.length; i++) {{
                                     try {{
                                         var iframe = iframes[i];
@@ -2124,6 +2331,7 @@ namespace 대진포스_쿼리
                                         if (rect.width > 0 && rect.height > 0) {{
                                             var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
                                             if (!iframeDoc || !iframeDoc.body) continue;
+                                            visibleIframeFound = true;
 
                                             var grid02 = iframeDoc.getElementById('jqGrid02');
                                             if (!grid02) continue;
@@ -2184,7 +2392,7 @@ namespace 대진포스_쿼리
                                         }}
                                     }} catch (e) {{}}
                                 }}
-                                return JSON.stringify({{rowCount: 0, sch01Amt: 0, sch02Total: 0, match: false}});
+                                return JSON.stringify({{rowCount: 0, sch01Amt: 0, sch02Total: 0, match: false, sch02absent: visibleIframeFound}});
                             }})();
                         ";
 
@@ -2199,8 +2407,9 @@ namespace 대진포스_쿼리
                             var rcMatch = System.Text.RegularExpressions.Regex.Match(rawResult, @"""rowCount""\s*:\s*(\d+)");
                             if (rcMatch.Success) int.TryParse(rcMatch.Groups[1].Value, out currentRowCount);
                             bool amtMatch = rawResult.Contains("\"match\":true");
+                            if (rawResult.Contains("\"sch02absent\":true")) sch02AbsentDetected = true;
 
-                            LogDebug($"재시도 {retryCount + 1}, 시도 #{attempt + 1}: {currentRowCount}행, 금액일치={amtMatch}");
+                            LogDebug($"재시도 {retryCount + 1}, 시도 #{attempt + 1}: {currentRowCount}행, 금액일치={amtMatch}, sch02없음={sch02AbsentDetected}");
 
                             if (currentRowCount > 1 && amtMatch)
                             {
@@ -2246,15 +2455,20 @@ namespace 대진포스_쿼리
                     // 데이터 로드 실패 시 실패 로그에 기록
                     if (!storeDataLoaded)
                     {
-                        string failureLog = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} | 날짜: {targetDate?.ToString("yyyy-MM-dd") ?? "미지정"} | 매장 #{i} ({storeName}) | 계정: {accountId ?? "미지정"} | 재시도 {maxRetries}회 후 실패";
+                        string skipReason = sch02AbsentDetected ? "sch02 없음" : $"로딩 타임아웃 (재시도 {maxRetries}회)";
+                        string failureLog = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} | 날짜: {targetDate?.ToString("yyyy-MM-dd") ?? "미지정"} | 매장 #{i} ({storeName}) | 계정: {accountId ?? "미지정"} | {skipReason}";
                         _failedStores.Add(failureLog);
 
-                        LogDebug($"❌ 매장 #{i} ({storeName}): 데이터 로드 실패 (재시도 {maxRetries}회)");
+                        // DB SkippedStores 테이블에도 기록 (차트에서 0원으로 표시됨)
+                        if (targetDate.HasValue && !string.IsNullOrEmpty(storeName))
+                            DbSaver.AddSkippedStore(targetDate.Value, storeName, skipReason);
+
+                        LogDebug($"❌ 매장 #{i} ({storeName}): {skipReason}");
                         System.Diagnostics.Debug.WriteLine($"⚠️ 매장 {i} ({storeName}): 데이터 로드 실패 - 건너뜀");
-                        SetS($"❌ 매장 {i} ({storeName}) 데이터 로드 실패 - 건너뜀");
+                        SetS($"❌ 매장 {i} ({storeName}) 데이터 로드 실패 ({skipReason}) - 건너뜀");
 
                         if (!string.IsNullOrEmpty(targetStoreName))
-                            _autoModeFailReason = $"매장 '{storeName}' 클릭 후 아래표 데이터 로딩 타임아웃 (재시도 {maxRetries}회)";
+                            _autoModeFailReason = $"매장 '{storeName}' {skipReason}";
 
                         await Task.Delay(500);
                         continue;
