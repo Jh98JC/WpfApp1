@@ -94,6 +94,13 @@ namespace 대진포스_쿼리
         private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
         [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
         private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        private const int SW_RESTORE = 9;
         private static IntPtr SetParentHwnd(IntPtr hWnd, IntPtr newParent)
         {
             if (IntPtr.Size == 8) return SetWindowLongPtr64(hWnd, GWL_HWNDPARENT, newParent);
@@ -433,7 +440,20 @@ namespace 대진포스_쿼리
             {
                 e.Cancel = true;
                 Dispatcher.BeginInvoke(new Action(HideToBackground));
+                return;
             }
+
+            // 실제 종료 직전에 부모(WpfApp2 MainWindow)를 미리 포어그라운드로.
+            // 자식이 사라진 후 OS가 처리하기 전에 부모를 띄워두면 Z-order 깜빡임이 사라짐.
+            try
+            {
+                if (App.ParentHwnd != IntPtr.Zero)
+                {
+                    if (IsIconic(App.ParentHwnd)) ShowWindow(App.ParentHwnd, SW_RESTORE);
+                    SetForegroundWindow(App.ParentHwnd);
+                }
+            }
+            catch { }
         }
 
         private async void AutoModeStartup(object sender, RoutedEventArgs e)
@@ -532,7 +552,7 @@ namespace 대진포스_쿼리
                 statusText.Text = "연결 확인 중...";
                 try
                 {
-                    using (var conn = new System.Data.SqlClient.SqlConnection(cs))
+                    using (var conn = new Microsoft.Data.SqlClient.SqlConnection(cs))
                         conn.Open();
                     statusText.Foreground = System.Windows.Media.Brushes.Green;
                     statusText.Text = "✅ 연결 성공!";

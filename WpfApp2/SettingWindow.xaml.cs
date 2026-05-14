@@ -35,8 +35,9 @@ namespace WpfApp2
 
             BuildThemeCards();
 
-            // 마스터 계정만 DB 설정 버튼 표시
+            // 마스터 계정만 DB 설정 버튼 + 대진포스 쿼리카드 표시
             dbConfigBtn.Visibility = Session.IsMaster ? Visibility.Visible : Visibility.Collapsed;
+            PosQueryCard.Visibility = Session.IsMaster ? Visibility.Visible : Visibility.Collapsed;
 
             // Owner는 Show() 이후 설정되므로 Loaded에서 초기화
             Loaded += async (_, __) =>

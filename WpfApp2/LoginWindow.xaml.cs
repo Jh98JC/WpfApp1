@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using WpfColor = System.Windows.Media.Color;
 
@@ -7,6 +9,11 @@ namespace WpfApp2
 {
     public partial class LoginWindow : Window
     {
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
+        [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+
         private bool _showingPassword = false;
         private CancellationTokenSource? _pollCts;
 
@@ -17,7 +24,22 @@ namespace WpfApp2
             Closed += (_, _) => _pollCts?.Cancel();
             PreviewKeyUp += (_, _) => UpdateCapsLock();
             PreviewKeyDown += (_, _) => UpdateCapsLock();
+            Activated += (_, _) => UpdateTopmost();
         }
+
+        private bool IsOtherWindowFullscreen()
+        {
+            var fgHwnd = GetForegroundWindow();
+            if (fgHwnd == IntPtr.Zero) return false;
+            var ownHwnd = new WindowInteropHelper(this).Handle;
+            if (fgHwnd == ownHwnd) return false;
+            GetWindowRect(fgHwnd, out RECT r);
+            int sw = GetSystemMetrics(0);
+            int sh = GetSystemMetrics(1);
+            return r.Left <= 0 && r.Top <= 0 && r.Right >= sw && r.Bottom >= sh;
+        }
+
+        private void UpdateTopmost() => Topmost = !IsOtherWindowFullscreen();
 
         private void UpdateCapsLock()
         {
@@ -28,6 +50,7 @@ namespace WpfApp2
 
         private async void LoginWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            UpdateTopmost();
             _pollCts = new CancellationTokenSource();
             _ = PollDbStatusAsync(_pollCts.Token);
 

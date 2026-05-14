@@ -449,6 +449,7 @@ namespace WpfApp2
                     proc.Exited += (_, __) =>
                     {
                         if (InteractiveProcessId == proc.Id) InteractiveProcessId = null;
+                        ActivateMainWindow();
                     };
                 }
                 catch { }
@@ -559,20 +560,54 @@ namespace WpfApp2
             }
         }
 
+        // 자식(대진포스 쿼리.exe) 종료 시 WpfApp2 MainWindow를 활성화 — 백업.
+        // 자식 OnClosing에서 SetForegroundWindow를 먼저 호출하므로 일반적으로는
+        // 부모가 이미 포어그라운드 상태. 여기선 최소화 복원과 보조 Activate만 수행.
+        private static void ActivateMainWindow()
+        {
+            try
+            {
+                var app = System.Windows.Application.Current;
+                if (app == null) return;
+                app.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        var main = app.MainWindow;
+                        if (main == null || !main.IsVisible) return;
+                        if (main.WindowState == System.Windows.WindowState.Minimized)
+                            main.WindowState = System.Windows.WindowState.Normal;
+                        main.Activate();
+                    }
+                    catch { }
+                }));
+            }
+            catch { }
+        }
+
         private static string? FindScraperExe()
         {
             const string ExeName = "대진포스 쿼리.exe";
+
+            const string Tfm = "net8.0-windows";
 
             var candidates = new List<string>
             {
                 // WpfApp2.exe와 같은 폴더에 배포한 경우
                 Path.Combine(AppContext.BaseDirectory, ExeName),
-                // 개발환경: WpfApp2\bin\Debug\net8.0-windows → ..\..\..\..\대진포스 쿼리\bin\Release|Debug
+                // 개발환경(.NET 8): bin\(Debug|Release)\net8.0-windows
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Release", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Debug", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Release", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Debug", Tfm, ExeName),
+                // 구버전(.NET Framework 4.8) 경로 — 호환 폴백
                 Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
                 Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
                 Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
                 Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
                 // 절대경로 폴백 (이 머신 한정)
+                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Release\" + Tfm + @"\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Debug\" + Tfm + @"\" + ExeName,
                 @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Release\" + ExeName,
                 @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Debug\" + ExeName,
             };

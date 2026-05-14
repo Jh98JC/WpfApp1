@@ -173,8 +173,9 @@
                     <!-- 섹션 구분선 -->
                     <Border Height="1" Background="{DynamicResource StatusBarBorderBrush}" Margin="0,16,0,16"/>
 
-                    <!-- 대진포스 쿼리 섹션 (테마 색상 반영) -->
-                    <Border Background="{DynamicResource ContextMenuBackgroundBrush}"
+                    <!-- 대진포스 쿼리 섹션 (테마 색상 반영) — 마스터 전용 -->
+                    <Border x:Name="PosQueryCard"
+                            Background="{DynamicResource ContextMenuBackgroundBrush}"
                             BorderBrush="{DynamicResource StatusBarBorderBrush}" BorderThickness="1"
                             CornerRadius="10" Padding="14,12,14,14">
                         <StackPanel>

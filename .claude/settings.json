@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "Bash(dotnet build)",
+      "Bash(dotnet restore *)",
+      "Bash(dotnet add *)",
+      "Bash(powershell *)",
+      "Bash(powershell -Command *)",
+      "PowerShell(dotnet build *)",
+      "PowerShell(dotnet build * 2>&1 *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(sqlcmd *)",
+      "Bash(sqlcmd *)",
+      "Bash(git add *)",
+      "Bash(git commit -m *)",
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(python3 *)",
+      "Bash(winget upgrade *)"
+    ]
+  }
+}

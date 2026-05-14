@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,7 +13,7 @@ namespace WpfApp2
     {
         public event EventHandler? RequestClose;
 
-        private System.DateTime? _refetchDate;
+        private System.Collections.Generic.List<System.DateTime> _refetchDates = new();
         private System.Windows.Controls.Primitives.Popup? _refetchPopup;
         private System.Windows.Controls.Calendar? _refetchCal;
 
@@ -30,8 +31,8 @@ namespace WpfApp2
                 UpdateMappingHint();
             };
 
-            _refetchDate = DaejinPosService.GetAutoTargetDate();
-            RefetchDateText.Text = _refetchDate.Value.ToString("yy-MM-dd");
+            _refetchDates.Add(DaejinPosService.GetAutoTargetDate());
+            UpdateDateDisplay();
         }
 
         private void UpdateMappingHint()
@@ -48,6 +49,20 @@ namespace WpfApp2
             catch { }
         }
 
+        private void UpdateDateDisplay()
+        {
+            if (_refetchDates.Count == 0)
+                RefetchDateText.Text = "날짜 선택";
+            else if (_refetchDates.Count == 1)
+                RefetchDateText.Text = _refetchDates[0].ToString("yy-MM-dd");
+            else
+            {
+                var min = _refetchDates.Min();
+                var max = _refetchDates.Max();
+                RefetchDateText.Text = $"{min:M/d}~{max:M/d} ({_refetchDates.Count}일)";
+            }
+        }
+
         private void RefetchDateButton_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
             EnsureRefetchPopup();
@@ -58,20 +73,27 @@ namespace WpfApp2
         {
             if (_refetchPopup != null) return;
 
-            var darkBg = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x15, 0x15, 0x1E));
-            var fg = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xE0, 0xE0, 0xF0));
-            var dim = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x3A, 0x3A, 0x55));
-            var hov = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x32, 0x32, 0x55));
+            var darkBg  = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x15, 0x15, 0x1E));
+            var darkBg2 = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x25, 0x25, 0x3A));
+            var fg      = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xE0, 0xE0, 0xF0));
+            var dim     = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x3A, 0x3A, 0x55));
+            var hov     = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x32, 0x32, 0x55));
 
             _refetchCal = new SWC.Calendar
             {
-                DisplayMode = SWC.CalendarMode.Month,
-                SelectedDate = _refetchDate,
-                Background = darkBg,
-                Foreground = fg,
-                BorderBrush = dim,
+                DisplayMode   = SWC.CalendarMode.Month,
+                SelectionMode = SWC.CalendarSelectionMode.SingleRange,
+                Background    = darkBg,
+                Foreground    = fg,
+                BorderBrush   = dim,
                 BorderThickness = new Thickness(1)
             };
+
+            if (_refetchDates.Count > 0)
+            {
+                var sorted = _refetchDates.OrderBy(d => d).ToList();
+                _refetchCal.SelectedDates.AddRange(sorted.First(), sorted.Last());
+            }
 
             var calItemStyle = new Style(typeof(System.Windows.Controls.Primitives.CalendarItem));
             calItemStyle.Setters.Add(new Setter(System.Windows.Controls.Primitives.CalendarItem.BackgroundProperty, darkBg));
@@ -93,60 +115,101 @@ namespace WpfApp2
 
             _refetchCal.SelectedDatesChanged += (s, a) =>
             {
-                if (_refetchCal!.SelectedDate.HasValue)
-                {
-                    _refetchDate = _refetchCal.SelectedDate;
-                    RefetchDateText.Text = _refetchDate.Value.ToString("yy-MM-dd");
-                }
+                _refetchDates = _refetchCal.SelectedDates.ToList();
+                UpdateDateDisplay();
             };
 
-            _refetchCal.AddHandler(UIElement.MouseLeftButtonUpEvent,
-                new MouseButtonEventHandler((s, a) =>
+            // 프리셋 버튼 패널
+            var presetPanel = new WrapPanel { Margin = new Thickness(2, 4, 2, 2) };
+
+            ControlTemplate MakePresetTemplate()
+            {
+                var f = new FrameworkElementFactory(typeof(Border));
+                f.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+                f.SetValue(Border.BackgroundProperty, darkBg2);
+                f.SetValue(Border.BorderBrushProperty, dim);
+                f.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+                var cp = new FrameworkElementFactory(typeof(ContentPresenter));
+                cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Center);
+                cp.SetValue(ContentPresenter.VerticalAlignmentProperty, System.Windows.VerticalAlignment.Center);
+                f.AppendChild(cp);
+                return new ControlTemplate(typeof(SWC.Button)) { VisualTree = f };
+            }
+
+            var presetTpl = MakePresetTemplate();
+
+            void AddPreset(string label, System.DateTime from, System.DateTime to)
+            {
+                var btn = new SWC.Button
                 {
-                    var src = a.OriginalSource as DependencyObject;
-                    while (src != null && src != _refetchCal)
-                    {
-                        if (src is System.Windows.Controls.Primitives.CalendarDayButton)
-                        {
-                            if (_refetchDate.HasValue) _refetchPopup!.IsOpen = false;
-                            break;
-                        }
-                        src = SWM.VisualTreeHelper.GetParent(src);
-                    }
-                }), true);
+                    Content  = label,
+                    Width    = 52,
+                    Height   = 22,
+                    FontSize = 11,
+                    Foreground = fg,
+                    Margin   = new Thickness(2),
+                    Cursor   = System.Windows.Input.Cursors.Hand,
+                    Template = presetTpl
+                };
+                btn.Click += (_, _) =>
+                {
+                    _refetchCal!.SelectedDates.Clear();
+                    _refetchCal.SelectedDates.AddRange(from, to);
+                    _refetchPopup!.IsOpen = false;
+                };
+                presetPanel.Children.Add(btn);
+            }
+
+            var yest = System.DateTime.Today.AddDays(-1);
+            var dow = (int)yest.DayOfWeek;
+            var daysFromMon = dow == 0 ? 6 : dow - 1;
+            var thisMon = yest.AddDays(-daysFromMon);
+
+            AddPreset("어제",   yest, yest);
+            AddPreset("3일",    yest.AddDays(-2), yest);
+            AddPreset("7일",    yest.AddDays(-6), yest);
+            AddPreset("이번주", thisMon, yest);
+            AddPreset("저번주", thisMon.AddDays(-7), thisMon.AddDays(-1));
+
+            var outerStack = new StackPanel();
+            outerStack.Children.Add(presetPanel);
+            outerStack.Children.Add(_refetchCal);
 
             var popupBorder = new Border
             {
-                Background = darkBg,
-                BorderBrush = dim,
+                Background      = darkBg,
+                BorderBrush     = dim,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(2),
-                Child = _refetchCal
+                Padding         = new Thickness(2),
+                Child           = outerStack
             };
 
             _refetchPopup = new System.Windows.Controls.Primitives.Popup
             {
-                PlacementTarget = RefetchDateButton,
-                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                PlacementTarget    = RefetchDateButton,
+                Placement          = System.Windows.Controls.Primitives.PlacementMode.Bottom,
                 AllowsTransparency = true,
-                StaysOpen = false,
-                Child = popupBorder
+                StaysOpen          = false,
+                Child              = popupBorder
             };
         }
 
         private async void RefetchBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (!_refetchDate.HasValue)
+            if (_refetchDates.Count == 0)
             {
                 System.Windows.MessageBox.Show("재추출할 날짜를 선택하세요.", "알림",
                     System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
                 return;
             }
 
-            var date = _refetchDate.Value.Date;
+            var sorted = _refetchDates.Select(d => d.Date).Distinct().OrderBy(d => d).ToList();
+            string rangeText = sorted.Count == 1
+                ? $"{sorted[0]:yyyy-MM-dd}"
+                : $"{sorted.First():yyyy-MM-dd} ~ {sorted.Last():yyyy-MM-dd} ({sorted.Count}일)";
 
             var result = System.Windows.MessageBox.Show(
-                $"{date:yyyy-MM-dd} 날짜의 기존 데이터를 모두 삭제하고 다시 수집합니다.\n계속하시겠습니까?",
+                $"{rangeText} 날짜의 기존 데이터를 모두 삭제하고 다시 수집합니다.\n계속하시겠습니까?",
                 "재추출 확인",
                 System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
             if (result != System.Windows.MessageBoxResult.Yes) return;
@@ -155,7 +218,8 @@ namespace WpfApp2
             RefetchBtn.Content = "...";
             try
             {
-                await DaejinPosService.ForceRunAsync(date);
+                foreach (var date in sorted)
+                    await DaejinPosService.ForceRunAsync(date);
             }
             finally
             {
@@ -186,6 +250,21 @@ namespace WpfApp2
 
         private async Task LoadSkippedStoresAsync()
         {
+            // 이전 Row들의 강한 참조 체인을 즉시 끊어 GC가 빠르게 수거하도록 함
+            foreach (var child in SkippedList.Children.OfType<Border>().ToList())
+            {
+                if (child.Child is Grid g)
+                {
+                    foreach (var btn in g.Children.OfType<SWC.Button>().ToList())
+                    {
+                        btn.Template = null;
+                        btn.Tag = null;
+                    }
+                    g.Children.Clear();
+                }
+                child.Child = null;
+                child.Tag = null;
+            }
             SkippedList.Children.Clear();
             _rowCheckboxes.Clear();
 

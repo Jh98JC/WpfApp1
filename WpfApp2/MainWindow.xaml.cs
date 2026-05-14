@@ -163,6 +163,18 @@ namespace WpfApp2
         private bool _isGridVisible = false;
         private DispatcherTimer _gridCheckTimer;
 
+        // ThemeManager.ThemeChanged 해제용 필드 (static 이벤트 누수 방지)
+        private EventHandler _themeChangedHandler;
+        // DaejinPosService.StatusChanged 약한 구독 wrapper
+        private Action<string>? _posStatusChangedWeakWrapper;
+
+        // 공용 HttpClient (앱 전체에서 재사용 — 매 요청마다 새로 만들면 소켓 누수)
+        private static readonly HttpClient _httpClient = new HttpClient();
+
+        // 차트 인스턴스 캐시 — 탭 전환 시 차트를 매번 재생성하지 않고 detach/re-attach만 함.
+        // Key: 차트 Border, Value: border.Child(WrapWithDbDates로 감싼 FrameworkElement)
+        private readonly Dictionary<Border, FrameworkElement> _chartCache = new();
+
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
         [DllImport("user32.dll")]
@@ -236,8 +248,18 @@ namespace WpfApp2
             RestoreAllTabs(); // 탭 복원을 먼저 수행
             RestoreAllButtonStates(); // 그 다음 버튼 복원
             RestoreAllChartStates(); // 차트 복원
-            ThemeManager.ThemeChanged += (_, _) => Dispatcher.Invoke(RefreshAllChartColors);
+            // 약한 이벤트 구독: target(MainWindow)이 GC되면 wrapper가 자동 분리됨
+            _themeChangedHandler = WeakEventHelper.SubscribeWeak(
+                h => ThemeManager.ThemeChanged += h,
+                h => ThemeManager.ThemeChanged -= h,
+                (s, e) => Dispatcher.Invoke(RefreshAllChartColors));
             tabControl.SelectionChanged += TabControl_SelectionChanged;
+
+            // DB 저장 완료(StatusChanged가 빈 문자열) 시 현재 탭의 Db 차트들을 새로고침
+            _posStatusChangedWeakWrapper = WeakEventHelper.SubscribeWeak<string>(
+                h => DaejinPosService.StatusChanged += h,
+                h => DaejinPosService.StatusChanged -= h,
+                OnDaejinPosStatusChanged);
             Loaded += MainWindow_Loaded;
             StateChanged += MainWindow_StateChanged;
 
@@ -249,7 +271,7 @@ namespace WpfApp2
             leaveTimer.Tick += LeaveTimer_Tick;
 
             // 그리드 표시 체크 타이머 (Shift 키 감지용)
-            _gridCheckTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            _gridCheckTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
             _gridCheckTimer.Tick += GridCheckTimer_Tick;
             _gridCheckTimer.Start();
 
@@ -290,6 +312,19 @@ namespace WpfApp2
             // 핫키 해제
             if (_hookHandle != IntPtr.Zero)
                 UnhookWindowsHookEx(_hookHandle);
+
+            // static 이벤트 구독 해제 (GC 누수 방지)
+            // 약한 이벤트 wrapper도 명시적으로 해제 — 즉시 GC 가능
+            if (_themeChangedHandler != null) ThemeManager.ThemeChanged -= _themeChangedHandler;
+            if (_posStatusChangedWeakWrapper != null) DaejinPosService.StatusChanged -= _posStatusChangedWeakWrapper;
+            DaejinPosService.StatusChanged -= OnPosStatusChanged;
+
+            // 타이머 정지
+            _gridCheckTimer?.Stop();
+            leaveTimer?.Stop();
+            _serverCheckTimer?.Stop();
+            _posStatusHideTimer?.Stop();
+
             _notifyIcon?.Dispose();
             _notifyHostForm?.Dispose();
             base.OnClosed(e);
@@ -546,7 +581,8 @@ namespace WpfApp2
 
             DaejinPosService.StatusChanged -= OnPosStatusChanged;
             DaejinPosService.StatusChanged += OnPosStatusChanged;
-            _ = DaejinPosService.RunAsync();
+            // 자동 수집(어제 데이터 취합)은 마스터 계정 로그인 시에만 실행
+            if (isMaster) _ = DaejinPosService.RunAsync();
         }
 
         // 누락목록 오버레이 표시 / 백드롭 클릭 시 닫기 / 컨트롤 내부 X 버튼으로 닫기
@@ -1312,10 +1348,16 @@ namespace WpfApp2
             dlg.ShowDialog();
         }
 
-        // 그리드 체크 타이머: 본 창이 활성 상태이고 Shift 키를 누르고 있을 때만 그리드 라인 표시
+        // 그리드 체크 타이머: MainWindow가 시스템 포어그라운드 상태이고 Shift 키를 누르고 있을 때만 그리드 표시.
+        // IsActive/Keyboard.Modifiers는 WPF 입력 시스템에 의존해 가끔 누락/스테일 상태가 되므로 Win32 직접 호출 사용.
         private void GridCheckTimer_Tick(object? sender, EventArgs e)
         {
-            bool shiftPressed = IsActive && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+            IntPtr ourHwnd = IntPtr.Zero;
+            try { ourHwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle; }
+            catch { }
+            bool isForeground = ourHwnd != IntPtr.Zero && GetForegroundWindow() == ourHwnd;
+            bool shiftPhysical = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            bool shiftPressed = isForeground && shiftPhysical;
 
             if (shiftPressed && !_isGridVisible)
             {
@@ -1883,14 +1925,18 @@ namespace WpfApp2
                                 tabControl.SelectedIndex = 1;
                         }
 
-                        // Canvas의 Name을 UnregisterName
-                        if (tabItem.Content is Border border && border.Child is Canvas canvas && !string.IsNullOrEmpty(canvas.Name))
+                        // Canvas의 Name을 UnregisterName + 해당 탭의 차트 캐시 정리
+                        if (tabItem.Content is Border border && border.Child is Canvas canvas)
                         {
-                            try
+                            foreach (var cb in canvas.Children.OfType<Border>().Where(b => b.Tag is ChartMeta).ToList())
                             {
-                                UnregisterName(canvas.Name);
+                                ReleaseChartChild(cb.Child);
+                                _chartCache.Remove(cb);
                             }
-                            catch { }
+                            if (!string.IsNullOrEmpty(canvas.Name))
+                            {
+                                try { UnregisterName(canvas.Name); } catch { }
+                            }
                         }
 
                         // 탭 삭제
@@ -3152,12 +3198,29 @@ namespace WpfApp2
 
             var dbDateRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
             dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "시작 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            System.Windows.Controls.DatePicker? dbEndDatePicker = null;
             var dbStartDatePicker = new System.Windows.Controls.DatePicker { Width = 120, Margin = new Thickness(0, 0, 12, 0), SelectedDate = _dbStart };
-            dbStartDatePicker.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbStart = dp.SelectedDate; };
-            dbStartDatePicker.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbStart = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _dbStart = p; dp.SelectedDate = p; } };
+            dbStartDatePicker.SelectedDateChanged += (s, _) =>
+            {
+                var dp = (System.Windows.Controls.DatePicker)s;
+                if (dp.SelectedDate.HasValue)
+                {
+                    _dbStart = dp.SelectedDate;
+                    if (_dbEnd.HasValue && _dbStart > _dbEnd && dbEndDatePicker != null)
+                    { _dbEnd = _dbStart; dbEndDatePicker.SelectedDate = _dbStart; }
+                }
+            };
+            dbStartDatePicker.CalendarClosed += (s, _) =>
+            {
+                var dp = (System.Windows.Controls.DatePicker)s;
+                if (dp.SelectedDate.HasValue) _dbStart = dp.SelectedDate;
+                else if (DateTime.TryParse(dp.Text, out var p)) { _dbStart = p; dp.SelectedDate = p; }
+                if (_dbEnd.HasValue && _dbStart > _dbEnd && dbEndDatePicker != null)
+                { _dbEnd = _dbStart; dbEndDatePicker.SelectedDate = _dbStart; }
+            };
             dbDateRow.Children.Add(dbStartDatePicker);
             dbDateRow.Children.Add(new System.Windows.Controls.TextBlock { Text = "종료 날짜:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-            var dbEndDatePicker = new System.Windows.Controls.DatePicker { Width = 120, SelectedDate = _dbEnd };
+            dbEndDatePicker = new System.Windows.Controls.DatePicker { Width = 120, SelectedDate = _dbEnd };
             dbEndDatePicker.SelectedDateChanged += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbEnd = dp.SelectedDate; };
             dbEndDatePicker.CalendarClosed      += (s, _) => { var dp = (System.Windows.Controls.DatePicker)s; if (dp.SelectedDate.HasValue) _dbEnd = dp.SelectedDate; else if (DateTime.TryParse(dp.Text, out var p)) { _dbEnd = p; dp.SelectedDate = p; } };
             dbDateRow.Children.Add(dbEndDatePicker);
@@ -3337,7 +3400,9 @@ namespace WpfApp2
             {
                 if (chartControl is System.Windows.Controls.Control ctrl)
                     ctrl.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "StatusBarBackgroundBrush");
-                border.Child = WrapWithDbDates(chartControl, meta);
+                var _wrapped = WrapWithDbDates(chartControl, meta);
+                border.Child = _wrapped;
+                _chartCache[border] = _wrapped;
             }
 
             // Canvas에 배치
@@ -3364,6 +3429,8 @@ namespace WpfApp2
                         meta.RefreshTimer.Stop();
                         meta.RefreshTimer = null;
                     }
+                    ReleaseChartChild(border.Child);
+                    _chartCache.Remove(border);
                     canvas.Children.Remove(border);
                     SaveAllChartStates();
                 }
@@ -4649,11 +4716,35 @@ ORDER BY 날짜 DESC";
             }
         }
 
+        // 이전 활성 탭 인덱스 — 탭 전환 시 이전 탭의 차트 메모리를 해제하기 위함
+        private int _previousTabIndex = -1;
+
         private void TabControl_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (e.Source != tabControl) return; // 내부 컨트롤의 이벤트 버블링 무시
             int idx = tabControl.SelectedIndex;
             if (idx < 0) return;
+
+            // 이전 탭 차트를 캐시에 보관 후 detach (재진입 시 그대로 재사용 — 누적 차단)
+            if (_previousTabIndex >= 0 && _previousTabIndex != idx)
+            {
+                var prevCanvas = GetCanvasByIndex(_previousTabIndex);
+                if (prevCanvas != null)
+                {
+                    foreach (UIElement child in prevCanvas.Children.OfType<UIElement>().ToList())
+                    {
+                        if (child is System.Windows.Controls.Border prevBorder &&
+                            prevBorder.Tag is ChartMeta &&
+                            prevBorder.Child is FrameworkElement currentChild)
+                        {
+                            _chartCache[prevBorder] = currentChild;
+                            prevBorder.Child = null;
+                        }
+                    }
+                }
+            }
+            _previousTabIndex = idx;
+
             var canvas = GetCanvasByIndex(idx);
             if (canvas == null) return;
 
@@ -4662,6 +4753,31 @@ ORDER BY 날짜 DESC";
                 if (child is System.Windows.Controls.Border chartBorder && chartBorder.Tag is ChartMeta meta)
                     RefreshChartData(chartBorder, meta);
             }
+        }
+
+        // DaejinPosService.StatusChanged 핸들러: DB 저장 완료 시 현재 탭의 Db 차트만 새로고침.
+        // 다른 탭은 TabControl_SelectionChanged가 탭 진입 시 자동 새로고침하므로 여기선 안 함.
+        private void OnDaejinPosStatusChanged(string status)
+        {
+            if (!string.IsNullOrEmpty(status)) return; // 빈 문자열 = 작업 종료
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    int idx = tabControl.SelectedIndex;
+                    if (idx < 0) return;
+                    var canvas = GetCanvasByIndex(idx);
+                    if (canvas == null) return;
+                    foreach (UIElement child in canvas.Children.OfType<UIElement>().ToList())
+                    {
+                        if (child is System.Windows.Controls.Border chartBorder
+                            && chartBorder.Tag is ChartMeta meta
+                            && meta.DataSource == "Db")
+                            RefreshChartData(chartBorder, meta);
+                    }
+                }
+                catch { }
+            }));
         }
 
         private void AttachChartDragHandlers(Border border, Canvas canvas)
@@ -5194,7 +5310,7 @@ ORDER BY 날짜 DESC";
                         case "HBar": nc = CreateHBarChart(meta); break; case "Pie": nc = CreatePieChart(meta); break;
                         case "Gauge": nc = CreateGaugeChart(meta); break; case "RankList": nc = CreateRankList(meta); break;
                     }
-                    if (nc != null) { if (meta.InnerHeight > 0 && nc is System.Windows.Controls.ScrollViewer sv2 && sv2.Content is CartesianChart cc2) ApplyInnerChartHeight(cc2, meta); border.Child = WrapWithDbDates(nc, meta); }
+                    if (nc != null) { if (meta.InnerHeight > 0 && nc is System.Windows.Controls.ScrollViewer sv2 && sv2.Content is CartesianChart cc2) ApplyInnerChartHeight(cc2, meta); var _oldNc = border.Child; var _wrappedNc = WrapWithDbDates(nc, meta); border.Child = _wrappedNc; _chartCache[border] = _wrappedNc; ReleaseChartChild(_oldNc); }
                     SaveAllChartStates(); configDlg.Close();
                 };
             }
@@ -5476,7 +5592,7 @@ ORDER BY 날짜 DESC";
                         case "HBar": nc2 = CreateHBarChart(meta); break; case "Pie": nc2 = CreatePieChart(meta); break;
                         case "Gauge": nc2 = CreateGaugeChart(meta); break; case "RankList": nc2 = CreateRankList(meta); break;
                     }
-                    if (nc2 != null) { if (meta.InnerHeight > 0 && nc2 is System.Windows.Controls.ScrollViewer sv4 && sv4.Content is CartesianChart cc4) ApplyInnerChartHeight(cc4, meta); border.Child = WrapWithDbDates(nc2, meta); }
+                    if (nc2 != null) { if (meta.InnerHeight > 0 && nc2 is System.Windows.Controls.ScrollViewer sv4 && sv4.Content is CartesianChart cc4) ApplyInnerChartHeight(cc4, meta); var _oldNc2 = border.Child; var _wrappedNc2 = WrapWithDbDates(nc2, meta); border.Child = _wrappedNc2; _chartCache[border] = _wrappedNc2; ReleaseChartChild(_oldNc2); }
                     SaveAllChartStates(); configDlg.Close();
                 };
             }
@@ -5514,6 +5630,14 @@ ORDER BY 날짜 DESC";
                         break;
                 }
 
+                // border가 detached 상태(탭 전환 등)면 캐시된 차트를 다시 붙임
+                if (border.Child == null && _chartCache.TryGetValue(border, out var cached))
+                    border.Child = cached;
+
+                // 기존 차트 in-place 갱신 (SkiaSharp 객체 재할당 회피)
+                if (TryUpdateChartInPlace(border, meta))
+                    return;
+
                 // 차트 다시 생성
                 FrameworkElement newChart = null;
                 switch (meta.ChartType)
@@ -5531,7 +5655,12 @@ ORDER BY 날짜 DESC";
                         newChart is System.Windows.Controls.ScrollViewer svRef &&
                         svRef.Content is CartesianChart ccRef)
                         ApplyInnerChartHeight(ccRef, meta);
-                    border.Child = WrapWithDbDates(newChart, meta);
+                    // 이전 차트 SkiaSharp 리소스 해제 후 교체 (캐시도 갱신)
+                    var oldChild = border.Child;
+                    var wrapped = WrapWithDbDates(newChart, meta);
+                    border.Child = wrapped;
+                    _chartCache[border] = wrapped;
+                    ReleaseChartChild(oldChild);
                 }
             }
             catch (Exception ex)
@@ -5552,8 +5681,8 @@ ORDER BY 날짜 DESC";
             else if (Uri.TryCreate(meta.DataPath, UriKind.Absolute, out var dataUri) &&
                      (dataUri.Scheme == Uri.UriSchemeHttps || dataUri.Scheme == Uri.UriSchemeHttp))
             {
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                json = await client.GetStringAsync(meta.DataPath);
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                json = await _httpClient.GetStringAsync(meta.DataPath, cts.Token);
             }
             else
             {
@@ -5595,8 +5724,7 @@ ORDER BY 날짜 DESC";
         {
             if (string.IsNullOrEmpty(meta.DataPath)) return;
 
-            using var client = new HttpClient();
-            var json = await client.GetStringAsync(meta.DataPath);
+            var json = await _httpClient.GetStringAsync(meta.DataPath);
             var data = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, object>>(json);
 
             if (data != null)
@@ -5945,8 +6073,16 @@ ORDER BY 값 {sortDir}";
                 Func<DateTime?> getStart = () => null;
                 Func<DateTime?> getEnd   = () => null;
                 FrameworkElement startCtrl, endCtrl;
-                (startCtrl, getStart) = CreateThemeDatePicker(meta.DbStartDate, () => RefreshInner());
-                (endCtrl,   getEnd)   = CreateThemeDatePicker(meta.DbEndDate,   () => RefreshInner());
+                Action<DateTime>? setEnd = null;
+                Action<DateTime> setEndTmp;
+                (startCtrl, getStart, _) = CreateThemeDatePicker(meta.DbStartDate, () =>
+                {
+                    var s = getStart(); var e = getEnd();
+                    if (s.HasValue && e.HasValue && s.Value > e.Value) setEnd?.Invoke(s.Value);
+                    RefreshInner();
+                });
+                (endCtrl, getEnd, setEndTmp) = CreateThemeDatePicker(meta.DbEndDate, () => RefreshInner());
+                setEnd = setEndTmp;
                 startCtrl.Margin = new Thickness(0, 0, 3, 0);
 
                 var lblStart = new System.Windows.Controls.TextBlock { Text = "시작", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0), FontSize = 10 };
@@ -6011,7 +6147,7 @@ ORDER BY 값 {sortDir}";
             return outerGrid;
         }
 
-        private (FrameworkElement control, Func<DateTime?> getDate) CreateThemeDatePicker(
+        private (FrameworkElement control, Func<DateTime?> getDate, Action<DateTime> setDate) CreateThemeDatePicker(
             DateTime? initialDate, Action onChanged)
         {
             DateTime? selected = initialDate;
@@ -6227,7 +6363,51 @@ ORDER BY 값 {sortDir}";
                 }
             };
 
-            return (btn, () => selected);
+            void SetDate(DateTime d)
+            {
+                selected = d;
+                prevApplied = d;
+                txt.Text = d.ToString("yy-MM-dd");
+                if (cal.SelectedDate != d) cal.SelectedDate = d;
+            }
+
+            return (btn, () => selected, SetDate);
+        }
+
+        // Line 차트의 경우 기존 CartesianChart의 Series Values와 X축 Labels만 교체.
+        // SkiaSharp Paint/Series/Axis 객체를 재할당하지 않아 메모리 누적을 크게 줄임.
+        // 구조가 다르면(시리즈 개수 변경 등) false 반환 → 호출자가 전체 재생성.
+        private bool TryUpdateChartInPlace(Border border, ChartMeta meta)
+        {
+            try
+            {
+                var chart = GetInnerChartFromChild(border.Child);
+                if (chart == null) return false;
+
+                if (meta.ChartType == "Line")
+                {
+                    var firstSeries = chart.Series?.Cast<ISeries>().FirstOrDefault();
+                    if (firstSeries is LineSeries<double> ls)
+                    {
+                        ls.Values = meta.StaticData;
+                        var firstX = chart.XAxes?.Cast<LiveChartsCore.Kernel.Sketches.ICartesianAxis>().FirstOrDefault();
+                        if (firstX is Axis xAxis) xAxis.Labels = meta.Labels;
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static void ReleaseChartChild(UIElement? child)
+        {
+            // CartesianChart의 Series/Axes를 비워 SkiaSharp native 메모리를 즉시 해제
+            var chart = GetInnerChartFromChild(child);
+            if (chart == null) return;
+            chart.Series = Array.Empty<ISeries>();
+            chart.XAxes  = Array.Empty<LiveChartsCore.Kernel.Sketches.ICartesianAxis>();
+            chart.YAxes  = Array.Empty<LiveChartsCore.Kernel.Sketches.ICartesianAxis>();
         }
 
         private static CartesianChart? GetInnerChartFromChild(UIElement? child)
@@ -6520,7 +6700,9 @@ ORDER BY 값 {sortDir}";
                             chartControl is System.Windows.Controls.ScrollViewer svRestore &&
                             svRestore.Content is CartesianChart ccRestore)
                             ApplyInnerChartHeight(ccRestore, meta);
-                        border.Child = WrapWithDbDates(chartControl, meta);
+                        var _wrappedR = WrapWithDbDates(chartControl, meta);
+                        border.Child = _wrappedR;
+                        _chartCache[border] = _wrappedR;
                     }
 
                     // 컨텍스트 메뉴 추가
@@ -6539,6 +6721,8 @@ ORDER BY 값 {sortDir}";
                                 meta.RefreshTimer.Stop();
                                 meta.RefreshTimer = null;
                             }
+                            ReleaseChartChild(border.Child);
+                            _chartCache.Remove(border);
                             canvas.Children.Remove(border);
                             SaveAllChartStates();
                         }
