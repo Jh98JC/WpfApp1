@@ -27,10 +27,10 @@ namespace WpfApp2
         public static string LastRunInfo { get; private set; } = string.Empty;
         public static DateTime? LastRunTime { get; private set; }
 
-        // 현재 백그라운드로 실행 중인 대진포스 쿼리.exe의 PID — 보기 버튼에서 사용
+        // 현재 백그라운드로 실행 중인 포스 수집기.exe의 PID — 보기 버튼에서 사용
         public static int? RunningProcessId { get; private set; }
 
-        // 사용자가 '수동 실행'으로 띄운 대진포스 쿼리.exe의 PID — 중복 실행 방지에 사용
+        // 사용자가 '수동 실행'으로 띄운 포스 수집기.exe의 PID — 중복 실행 방지에 사용
         public static int? InteractiveProcessId { get; private set; }
 
         private static bool IsProcessAlive(int? pid)
@@ -134,14 +134,14 @@ namespace WpfApp2
                     int rowsForDate = await DatabaseService.GetRowCountForDateAsync(date);
                     if (rowsForDate == 0)
                     {
-                        // 외부 스크래퍼(대진포스 쿼리.exe)를 한 번 시도해서 매출데이터를 채워본다.
+                        // 외부 스크래퍼(포스 수집기.exe)를 한 번 시도해서 매출데이터를 채워본다.
                         bool alreadyTried;
                         lock (_scrapedDatesThisSession)
                             alreadyTried = !_scrapedDatesThisSession.Add(date);
 
                         if (!alreadyTried)
                         {
-                            StatusChanged?.Invoke($"대진포스 쿼리 자동 수집중... ({date:yyyy-MM-dd})");
+                            StatusChanged?.Invoke($"포스 수집기 자동 수집중... ({date:yyyy-MM-dd})");
                             var (launched, ok, msg) = await TryRunExternalScraperAsync(date);
                             if (launched && ok)
                             {
@@ -295,7 +295,7 @@ namespace WpfApp2
                 return extOk;
             }
 
-            // 2) 매장 → 계정 매핑이 있으면 → 대진포스 쿼리.exe를 단일 매장 모드로 재실행
+            // 2) 매장 → 계정 매핑이 있으면 → 포스 수집기.exe를 단일 매장 모드로 재실행
             var mapping = StoreMappingService.Find(storeName);
             if (mapping != null && !string.IsNullOrEmpty(mapping.AccountId))
             {
@@ -394,7 +394,7 @@ namespace WpfApp2
             catch { return new List<PosStoreConfig>(); }
         }
 
-        // ── 대진포스 쿼리.exe를 사용자 모드로 실행 (--auto 없이) ────────────
+        // ── 포스 수집기.exe를 사용자 모드로 실행 (--auto 없이) ────────────
         // 위치/크기/부모 HWND를 전달하면 자식이 해당 좌표/소유 관계로 표시됨.
         // 이미 실행 중이면 기존 창을 활성화(앞으로 가져옴)하고 새로 띄우지 않는다.
         public static (bool launched, string message) LaunchInteractive(
@@ -418,7 +418,7 @@ namespace WpfApp2
 
             string? exePath = FindScraperExe();
             if (exePath == null)
-                return (false, "대진포스 쿼리.exe를 찾을 수 없음");
+                return (false, "포스 수집기.exe를 찾을 수 없음");
 
             try
             {
@@ -481,7 +481,7 @@ namespace WpfApp2
             catch { }
         }
 
-        // ── 외부 대진포스 쿼리.exe 자동 호출 ─────────────────────────────────
+        // ── 외부 포스 수집기.exe 자동 호출 ─────────────────────────────────
         private static Task<(bool launched, bool success, string message)> TryRunExternalScraperAsync(DateTime date)
             => TryRunExternalScraperAsync(date, storeName: null);
 
@@ -489,7 +489,7 @@ namespace WpfApp2
         {
             string? exePath = FindScraperExe();
             if (exePath == null)
-                return (false, false, "대진포스 쿼리.exe를 찾을 수 없음");
+                return (false, false, "포스 수집기.exe를 찾을 수 없음");
 
             string statusFile = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -560,7 +560,7 @@ namespace WpfApp2
             }
         }
 
-        // 자식(대진포스 쿼리.exe) 종료 시 WpfApp2 MainWindow를 활성화 — 백업.
+        // 자식(포스 수집기.exe) 종료 시 대시보드 MainWindow를 활성화 — 백업.
         // 자식 OnClosing에서 SetForegroundWindow를 먼저 호출하므로 일반적으로는
         // 부모가 이미 포어그라운드 상태. 여기선 최소화 복원과 보조 Activate만 수행.
         private static void ActivateMainWindow()
@@ -587,29 +587,29 @@ namespace WpfApp2
 
         private static string? FindScraperExe()
         {
-            const string ExeName = "대진포스 쿼리.exe";
+            const string ExeName = "포스 수집기.exe";
 
             const string Tfm = "net8.0-windows";
 
             var candidates = new List<string>
             {
-                // WpfApp2.exe와 같은 폴더에 배포한 경우
+                // 대시보드.exe와 같은 폴더에 배포한 경우
                 Path.Combine(AppContext.BaseDirectory, ExeName),
                 // 개발환경(.NET 8): bin\(Debug|Release)\net8.0-windows
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Release", Tfm, ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Debug", Tfm, ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Release", Tfm, ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Debug", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "포스 수집기", "bin", "Release", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "포스 수집기", "bin", "Debug", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "포스 수집기", "bin", "Release", Tfm, ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "포스 수집기", "bin", "Debug", Tfm, ExeName),
                 // 구버전(.NET Framework 4.8) 경로 — 호환 폴백
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Release", ExeName),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "대진포스 쿼리", "bin", "Debug", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "포스 수집기", "bin", "Release", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "포스 수집기", "bin", "Debug", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "포스 수집기", "bin", "Release", ExeName),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "포스 수집기", "bin", "Debug", ExeName),
                 // 절대경로 폴백 (이 머신 한정)
-                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Release\" + Tfm + @"\" + ExeName,
-                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Debug\" + Tfm + @"\" + ExeName,
-                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Release\" + ExeName,
-                @"C:\권지훈\1. 개인자료\Visual Studio\WpfApp1\대진포스 쿼리\bin\Debug\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\JH_DASH\포스 수집기\bin\Release\" + Tfm + @"\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\JH_DASH\포스 수집기\bin\Debug\" + Tfm + @"\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\JH_DASH\포스 수집기\bin\Release\" + ExeName,
+                @"C:\권지훈\1. 개인자료\Visual Studio\JH_DASH\포스 수집기\bin\Debug\" + ExeName,
             };
 
             foreach (var c in candidates)

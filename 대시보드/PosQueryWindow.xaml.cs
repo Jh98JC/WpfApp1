@@ -1,4 +1,3 @@
-using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -9,22 +8,17 @@ using SWC = System.Windows.Controls;
 
 namespace WpfApp2
 {
-    public partial class PosQueryControl : System.Windows.Controls.UserControl
+    public partial class PosQueryWindow : Window
     {
-        public event EventHandler? RequestClose;
-
         private System.Collections.Generic.List<System.DateTime> _refetchDates = new();
         private System.Windows.Controls.Primitives.Popup? _refetchPopup;
         private System.Windows.Controls.Calendar? _refetchCal;
 
-        private readonly System.Collections.Generic.Dictionary<SWC.CheckBox, SkippedStoreEntry> _rowCheckboxes
-            = new System.Collections.Generic.Dictionary<SWC.CheckBox, SkippedStoreEntry>();
-
-        public PosQueryControl()
+        public PosQueryWindow()
         {
             InitializeComponent();
             DaejinPosService.StatusChanged += OnPosStatus;
-            Unloaded += (_, _) => DaejinPosService.StatusChanged -= OnPosStatus;
+            Closed += (_, _) => DaejinPosService.StatusChanged -= OnPosStatus;
             Loaded += async (_, _) =>
             {
                 await LoadSkippedStoresAsync();
@@ -33,20 +27,6 @@ namespace WpfApp2
 
             _refetchDates.Add(DaejinPosService.GetAutoTargetDate());
             UpdateDateDisplay();
-        }
-
-        private void UpdateMappingHint()
-        {
-            try
-            {
-                var map = StoreMappingService.Load();
-                if (map.Stores.Count == 0)
-                {
-                    HeaderText.Text = "매장-계정 매핑이 없습니다. 한 번 '날짜 재추출(어제)'을 실행해 매핑을 만든 뒤 사용하세요.";
-                    HeaderText.Foreground = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xFF, 0xB3, 0x47));
-                }
-            }
-            catch { }
         }
 
         private void UpdateDateDisplay()
@@ -168,12 +148,33 @@ namespace WpfApp2
             AddPreset("어제",   yest, yest);
             AddPreset("3일",    yest.AddDays(-2), yest);
             AddPreset("7일",    yest.AddDays(-6), yest);
-            AddPreset("이번주", thisMon, yest);
-            AddPreset("저번주", thisMon.AddDays(-7), thisMon.AddDays(-1));
+
+            var confirmBtn = new SWC.Button
+            {
+                Content    = "확인",
+                Width      = 72,
+                Height     = 26,
+                FontSize   = 11,
+                Foreground = fg,
+                Margin     = new Thickness(2, 4, 2, 4),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                Cursor     = System.Windows.Input.Cursors.Hand,
+                Template   = presetTpl
+            };
+            confirmBtn.Click += (_, _) => _refetchPopup!.IsOpen = false;
+
+            var confirmPanel = new StackPanel
+            {
+                Orientation         = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                Margin              = new Thickness(2, 0, 2, 4)
+            };
+            confirmPanel.Children.Add(confirmBtn);
 
             var outerStack = new StackPanel();
             outerStack.Children.Add(presetPanel);
             outerStack.Children.Add(_refetchCal);
+            outerStack.Children.Add(confirmPanel);
 
             var popupBorder = new Border
             {
@@ -186,12 +187,26 @@ namespace WpfApp2
 
             _refetchPopup = new System.Windows.Controls.Primitives.Popup
             {
-                PlacementTarget    = RefetchDateButton,
-                Placement          = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                PlacementTarget  = RefetchDateButton,
+                Placement        = System.Windows.Controls.Primitives.PlacementMode.Bottom,
                 AllowsTransparency = true,
-                StaysOpen          = false,
-                Child              = popupBorder
+                StaysOpen        = false,
+                Child            = popupBorder
             };
+        }
+
+        private void UpdateMappingHint()
+        {
+            try
+            {
+                var map = StoreMappingService.Load();
+                if (map.Stores.Count == 0)
+                {
+                    HeaderText.Text = "매장-계정 매핑이 없습니다. 한 번 '날짜 재추출(어제)'을 실행해 매핑을 만든 뒤 사용하세요.";
+                    HeaderText.Foreground = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xFF, 0xB3, 0x47));
+                }
+            }
+            catch { }
         }
 
         private async void RefetchBtn_Click(object sender, RoutedEventArgs e)
@@ -250,21 +265,6 @@ namespace WpfApp2
 
         private async Task LoadSkippedStoresAsync()
         {
-            // 이전 Row들의 강한 참조 체인을 즉시 끊어 GC가 빠르게 수거하도록 함
-            foreach (var child in SkippedList.Children.OfType<Border>().ToList())
-            {
-                if (child.Child is Grid g)
-                {
-                    foreach (var btn in g.Children.OfType<SWC.Button>().ToList())
-                    {
-                        btn.Template = null;
-                        btn.Tag = null;
-                    }
-                    g.Children.Clear();
-                }
-                child.Child = null;
-                child.Tag = null;
-            }
             SkippedList.Children.Clear();
             _rowCheckboxes.Clear();
 
@@ -302,15 +302,18 @@ namespace WpfApp2
             }
         }
 
+        private readonly System.Collections.Generic.Dictionary<SWC.CheckBox, SkippedStoreEntry> _rowCheckboxes
+            = new System.Collections.Generic.Dictionary<SWC.CheckBox, SkippedStoreEntry>();
+
         private Border BuildRow(SkippedStoreEntry entry)
         {
             var row = new Border
             {
                 Background = SWM.Brushes.Transparent,
+                BorderBrush = new SWM.SolidColorBrush(SWM.Color.FromRgb(0x1E, 0x1E, 0x2E)),
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 Padding = new Thickness(12, 8, 12, 8)
             };
-            row.SetResourceReference(Border.BorderBrushProperty, "ContextMenuBorderBrush");
 
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -320,9 +323,9 @@ namespace WpfApp2
             var check = new SWC.CheckBox
             {
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0)
+                Margin = new Thickness(0, 0, 10, 0),
+                Foreground = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xA0, 0xA8, 0xC8))
             };
-            check.SetResourceReference(SWC.CheckBox.ForegroundProperty, "ForegroundBrush");
             Grid.SetColumn(check, 0);
             _rowCheckboxes[check] = entry;
 
@@ -330,9 +333,9 @@ namespace WpfApp2
             {
                 Text = entry.DisplayText,
                 FontSize = 12,
+                Foreground = new SWM.SolidColorBrush(SWM.Color.FromRgb(0xA0, 0xA8, 0xC8)),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            textBlock.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundBrush");
             Grid.SetColumn(textBlock, 1);
 
             var collectBtn = new SWC.Button
@@ -358,20 +361,6 @@ namespace WpfApp2
                 new SWM.SolidColorBrush(SWM.Color.FromArgb(30, 0x55, 0x55, 0x88));
             row.MouseLeave += (_, _) => row.Background = SWM.Brushes.Transparent;
 
-            // 행 어디를 클릭해도 체크박스 토글 (취합 버튼/체크박스 자체는 자기 클릭 핸들러로 처리)
-            row.MouseLeftButtonUp += (_, args) =>
-            {
-                var src = args.OriginalSource as DependencyObject;
-                while (src != null && src != row)
-                {
-                    if (src is SWC.Button) return;          // 취합 버튼은 무시
-                    if (src is SWC.CheckBox) return;        // 체크박스 자체 클릭은 기본 처리
-                    src = SWM.VisualTreeHelper.GetParent(src);
-                }
-                check.IsChecked = !(check.IsChecked == true);
-            };
-            row.Cursor = System.Windows.Input.Cursors.Hand;
-
             return row;
         }
 
@@ -379,8 +368,10 @@ namespace WpfApp2
         {
             var factory = new FrameworkElementFactory(typeof(Border));
             factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
-            factory.SetResourceReference(Border.BackgroundProperty, "ContextMenuBorderBrush");
-            factory.SetResourceReference(Border.BorderBrushProperty, "StatusBarBorderBrush");
+            factory.SetValue(Border.BackgroundProperty,
+                new SWM.SolidColorBrush(SWM.Color.FromRgb(0x25, 0x25, 0x38)));
+            factory.SetValue(Border.BorderBrushProperty,
+                new SWM.SolidColorBrush(SWM.Color.FromRgb(0x3A, 0x3A, 0x55)));
             factory.SetValue(Border.BorderThicknessProperty, new Thickness(1));
 
             var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -494,9 +485,14 @@ namespace WpfApp2
             await LoadSkippedStoresAsync();
         }
 
+        private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 1) DragMove();
+        }
+
         private void Close_Click(object sender, RoutedEventArgs e)
         {
-            RequestClose?.Invoke(this, EventArgs.Empty);
+            Close();
         }
     }
 }

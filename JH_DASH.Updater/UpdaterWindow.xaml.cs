@@ -95,7 +95,7 @@ namespace WpfApp2.Updater
             // appPath가 비어있으면 같은 폴더의 WpfApp2.exe로 폴백
             string appToStart = _appPath;
             if (string.IsNullOrEmpty(appToStart) || !System.IO.File.Exists(appToStart))
-                appToStart = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.exe");
+                appToStart = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "대시보드.exe");
 
             if (System.IO.File.Exists(appToStart))
             {

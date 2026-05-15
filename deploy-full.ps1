@@ -1,4 +1,4 @@
-# WpfApp2 완전 자동 배포 스크립트
+# 대시보드 완전 자동 배포 스크립트
 # GitHub CLI(gh) 필요: https://cli.github.com/
 
 param(
@@ -9,7 +9,7 @@ param(
     [string]$ChangelogMessage = "• 버그 수정 및 성능 개선"
 )
 
-Write-Host "=== WpfApp2 완전 자동 배포 ===" -ForegroundColor Cyan
+Write-Host "=== 대시보드 완전 자동 배포 ===" -ForegroundColor Cyan
 Write-Host "버전: $Version" -ForegroundColor Green
 Write-Host ""
 
@@ -50,7 +50,7 @@ $ChangelogMessage
 ## 설치 방법
 1. WpfApp2-v$Version.zip 다운로드
 2. 압축 해제
-3. WpfApp2.exe 실행
+3. 대시보드.exe 실행
 "@
 
 gh release create "v$Version" $zipFile `

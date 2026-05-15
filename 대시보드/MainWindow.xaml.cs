@@ -683,7 +683,7 @@ namespace WpfApp2
                 if (!pid.HasValue || pid.Value <= 0)
                 {
                     System.Windows.MessageBox.Show(
-                        "대진포스 쿼리가 실행 중이지 않습니다.",
+                        "포스 수집기가 실행 중이지 않습니다.",
                         "안내", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
                     return;
                 }
@@ -708,7 +708,7 @@ namespace WpfApp2
                 catch (System.Threading.WaitHandleCannotBeOpenedException)
                 {
                     System.Windows.MessageBox.Show(
-                        "대진포스 쿼리가 아직 준비 중입니다. 잠시 후 다시 시도해 주세요.",
+                        "포스 수집기가 아직 준비 중입니다. 잠시 후 다시 시도해 주세요.",
                         "안내", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
                 }
             }

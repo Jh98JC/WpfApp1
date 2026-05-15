@@ -5,8 +5,8 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <RootNamespace>대진포스_쿼리</RootNamespace>
-    <AssemblyName>대진포스 쿼리</AssemblyName>
+    <RootNamespace>포스_수집기</RootNamespace>
+    <AssemblyName>포스 수집기</AssemblyName>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Version>1.0.0</Version>

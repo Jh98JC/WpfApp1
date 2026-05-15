@@ -3,11 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.5.11709.299 stable
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WpfApp2", "WpfApp2\WpfApp2.csproj", "{347764D3-7B4E-4D6C-B3BB-7178E3C07D17}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "대시보드", "대시보드\대시보드.csproj", "{347764D3-7B4E-4D6C-B3BB-7178E3C07D17}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "대진포스 쿼리", "대진포스 쿼리\대진포스 쿼리.csproj", "{2FF45CCD-D94D-4BE8-BD71-2D76A1781EFB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "포스 수집기", "포스 수집기\포스 수집기.csproj", "{2FF45CCD-D94D-4BE8-BD71-2D76A1781EFB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WpfApp2.Updater", "WpfApp2.Updater\WpfApp2.Updater.csproj", "{E5F6A1B2-C3D4-4E5F-A6B7-C8D9E0F1A2B3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JH_DASH.Updater", "JH_DASH.Updater\JH_DASH.Updater.csproj", "{E5F6A1B2-C3D4-4E5F-A6B7-C8D9E0F1A2B3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

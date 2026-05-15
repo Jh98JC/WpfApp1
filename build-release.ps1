@@ -9,26 +9,26 @@
 $ErrorActionPreference = "Stop"
 
 $updateXml = "updates\update.xml"
-$projectDir = "WpfApp2"
-$updaterDir = "WpfApp2.Updater"
-$projectFile = "$projectDir\WpfApp2.csproj"
+$projectDir = "대시보드"
+$updaterDir = "JH_DASH.Updater"
+$projectFile = "$projectDir\대시보드.csproj"
 $publishDir = "publish\v$Version"
 $zipFile = "publish\WpfApp2-v$Version.zip"
 
 Write-Host ""
-Write-Host "=== WpfApp2 Release Build & Deploy ===" -ForegroundColor Cyan
+Write-Host "=== 대시보드 Release Build & Deploy ===" -ForegroundColor Cyan
 Write-Host "Version: $Version" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Update WpfApp2.csproj version
-Write-Host "[1/6] Updating WpfApp2.csproj version..." -ForegroundColor Yellow
+# 1. Update 대시보드.csproj version
+Write-Host "[1/6] Updating 대시보드.csproj version..." -ForegroundColor Yellow
 $csprojContent = Get-Content $projectFile -Raw -Encoding UTF8
 $csprojContent = $csprojContent -replace '<Version>[\d\.]+</Version>', "<Version>$Version</Version>"
 $csprojContent = $csprojContent -replace '<AssemblyVersion>[\d\.]+</AssemblyVersion>', "<AssemblyVersion>$Version</AssemblyVersion>"
 $csprojContent = $csprojContent -replace '<FileVersion>[\d\.]+</FileVersion>', "<FileVersion>$Version</FileVersion>"
 $encoding = [System.Text.UTF8Encoding]::new($false)
 [System.IO.File]::WriteAllText($projectFile, $csprojContent, $encoding)
-Write-Host "  OK WpfApp2.csproj updated to v$Version" -ForegroundColor Green
+Write-Host "  OK 대시보드.csproj updated to v$Version" -ForegroundColor Green
 
 # 2. Update update.xml
 Write-Host "[2/6] Updating update.xml..." -ForegroundColor Yellow
@@ -54,12 +54,12 @@ if (Test-Path $publishDir) {
 }
 dotnet publish $projectDir -c Release -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  X WpfApp2 build failed" -ForegroundColor Red
+    Write-Host "  X 대시보드 build failed" -ForegroundColor Red
     exit 1
 }
 dotnet publish $updaterDir -c Release -o $publishDir -p:PublishSingleFile=false -p:PublishReadyToRun=false
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  X WpfApp2.Updater build failed" -ForegroundColor Red
+    Write-Host "  X JH_DASH.Updater build failed" -ForegroundColor Red
     exit 1
 }
 Write-Host "  OK Build complete: $publishDir" -ForegroundColor Green

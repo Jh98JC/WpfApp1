@@ -544,7 +544,12 @@ namespace WpfApp2
         {
             const string sql = """
                 SELECT Id, CollectionDate, StoreName, Reason, CreatedAt
-                FROM SkippedStores ORDER BY CollectionDate DESC, StoreName
+                FROM (
+                    SELECT Id, CollectionDate, StoreName, Reason, CreatedAt,
+                           ROW_NUMBER() OVER (PARTITION BY CollectionDate, StoreName ORDER BY Id) AS rn
+                    FROM SkippedStores
+                ) t WHERE rn = 1
+                ORDER BY CollectionDate DESC, StoreName
                 """;
             var list = new List<SkippedStoreEntry>();
             await using var conn = new SqlConnection(DataConnectionString);

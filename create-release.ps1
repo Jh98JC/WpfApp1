@@ -31,7 +31,7 @@ $changelogContent
 ## Installation
 1. Download WpfApp2-v$Version.zip
 2. Extract files
-3. Run WpfApp2.exe
+3. Run 대시보드.exe
 "@
 
 gh release create "v$Version" $zipFile --title "Version $Version" --notes $releaseNotes

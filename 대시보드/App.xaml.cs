@@ -279,7 +279,7 @@ namespace WpfApp2
                 {
                     // EXE 인스톨러: 외부 업데이터 또는 배치 파일 방식
                     string silentArgs = DetectSilentArgs(tempFilePath);
-                    string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WpfApp2.Updater.exe");
+                    string updaterPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "JH_DASH.Updater.exe");
                     if (File.Exists(updaterPath))
                     {
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(updaterPath)

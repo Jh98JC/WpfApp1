@@ -7,6 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>대시보드</AssemblyName>
+    <RootNamespace>WpfApp2</RootNamespace>
     <Version>1.4.3</Version>
     <AssemblyVersion>1.4.3</AssemblyVersion>
     <FileVersion>1.4.3</FileVersion>
@@ -18,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\WpfApp2.Updater\WpfApp2.Updater.csproj">
+    <ProjectReference Include="..\JH_DASH.Updater\JH_DASH.Updater.csproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <Private>false</Private>
     </ProjectReference>
@@ -26,7 +28,7 @@
 
   <!-- 일반 빌드 시: bin 폴더에 복사 -->
   <Target Name="CopyUpdaterExe" AfterTargets="Build">
-    <Copy SourceFiles="..\WpfApp2.Updater\bin\$(Configuration)\net8.0-windows\WpfApp2.Updater.exe"
+    <Copy SourceFiles="..\JH_DASH.Updater\bin\$(Configuration)\net8.0-windows\JH_DASH.Updater.exe"
           DestinationFolder="$(OutputPath)"
           SkipUnchangedFiles="true"
           ContinueOnError="true"/>
@@ -34,7 +36,7 @@
 
   <!-- dotnet publish 시: publish 폴더에도 복사 -->
   <Target Name="CopyUpdaterExeToPublish" AfterTargets="Publish">
-    <Copy SourceFiles="..\WpfApp2.Updater\bin\$(Configuration)\net8.0-windows\WpfApp2.Updater.exe"
+    <Copy SourceFiles="..\JH_DASH.Updater\bin\$(Configuration)\net8.0-windows\JH_DASH.Updater.exe"
           DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true"
           ContinueOnError="true"/>
