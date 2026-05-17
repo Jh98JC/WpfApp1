@@ -245,6 +245,7 @@
                                     <ContextMenu>
                                         <MenuItem Header="버튼생성" Click="CreateButtonInBorder_Click"/>
                                         <MenuItem Header="차트생성" Click="CreateChartInBorder_Click"/>
+                                        <MenuItem Header="폴더생성" Click="CreateFolderInBorder_Click"/>
                                     </ContextMenu>
                                 </Border.ContextMenu>
                                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
@@ -309,6 +310,9 @@
             </DockPanel>
         </DockPanel>
     </Border>
+
+    <!-- 자식 창/다이얼로그가 열렸을 때 표시되는 어두운 배경 (취합누락 오버레이와 동일 톤) -->
+    <Grid x:Name="DialogDimmer" Visibility="Collapsed" Background="#80000000" IsHitTestVisible="False"/>
 
     <!-- 누락목록 오버레이 -->
     <Grid x:Name="PosQueryOverlay" Visibility="Collapsed"

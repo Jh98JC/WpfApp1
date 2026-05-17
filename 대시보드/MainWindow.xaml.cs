@@ -236,6 +236,10 @@ namespace WpfApp2
             return new System.Drawing.Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
         }
 
+        // 활성화된 자식 창 개수 추적. >0이면 DialogDimmer 표시.
+        private int _dimmerCount = 0;
+        private static bool _dimmerClassHandlerRegistered = false;
+
         public MainWindow()
         {
             if (!Directory.Exists(AppDataFolder))
@@ -243,11 +247,13 @@ namespace WpfApp2
 
             ThemeManager.LoadSaved();
             InitializeComponent();
+            RegisterDimmerHandler();
             WindowStartupLocation = WindowStartupLocation.Manual;
             // 위치 복원은 SourceInitialized에서 수행
             RestoreAllTabs(); // 탭 복원을 먼저 수행
             RestoreAllButtonStates(); // 그 다음 버튼 복원
             RestoreAllChartStates(); // 차트 복원
+            RestoreAllFolderStates(); // 폴더 복원
             // 약한 이벤트 구독: target(MainWindow)이 GC되면 wrapper가 자동 분리됨
             _themeChangedHandler = WeakEventHelper.SubscribeWeak(
                 h => ThemeManager.ThemeChanged += h,
@@ -331,6 +337,7 @@ namespace WpfApp2
             SaveWindowPosition();
             SaveAllTabs(); // 탭 정보 저장
             SaveAllButtonStates(); // 버튼 정보 저장
+            SaveAllFolderStates(); // 폴더 정보 저장
         }
 
         private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -583,6 +590,68 @@ namespace WpfApp2
             DaejinPosService.StatusChanged += OnPosStatusChanged;
             // 자동 수집(어제 데이터 취합)은 마스터 계정 로그인 시에만 실행
             if (isMaster) _ = DaejinPosService.RunAsync();
+        }
+
+        // 자식 창(다이얼로그/설정/차트 세부 등)이 열려 있을 때 메인 윈도우를 어둡게 표시.
+        // Why: 사용자가 현재 어떤 창이 활성인지 시각적으로 즉시 인지할 수 있도록(취합누락 오버레이와 동일 톤).
+        // How to apply: 모든 Window의 Loaded/Closed를 클래스 핸들러로 잡아 카운터를 증감시킨다.
+        private void RegisterDimmerHandler()
+        {
+            if (_dimmerClassHandlerRegistered) return;
+            _dimmerClassHandlerRegistered = true;
+            EventManager.RegisterClassHandler(typeof(Window), Window.LoadedEvent,
+                new RoutedEventHandler(OnAnyWindowLoaded));
+        }
+
+        private void OnAnyWindowLoaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Window w || w == this) return;
+            // MobileWindow/LogoWindow는 메인을 대체로 표시되는 형제 창이고 Hide()로만 닫혀 Closed가 발생하지 않으므로 제외.
+            if (w is MobileWindow || w is LogoWindow) return;
+            // MainWindow를 owner로 한(또는 owner의 owner인) 자식창만 dim 대상.
+            var owner = w.Owner;
+            bool isChildOfMain = false;
+            while (owner != null)
+            {
+                if (owner == this) { isChildOfMain = true; break; }
+                owner = owner.Owner;
+            }
+            if (!isChildOfMain) return;
+
+            // Loaded 시점에 IsVisible=true이면 1회 증가. 이후 visibility 변화에 따라 보정.
+            bool incremented = false;
+            if (w.IsVisible) { IncrementDimmer(); incremented = true; }
+
+            void OnVis(object? s2, DependencyPropertyChangedEventArgs e2)
+            {
+                if (w.IsVisible) { if (!incremented) { IncrementDimmer(); incremented = true; } }
+                else { if (incremented) { DecrementDimmer(); incremented = false; } }
+            }
+            EventHandler? onClosed = null;
+            onClosed = (_, _) =>
+            {
+                w.IsVisibleChanged -= OnVis;
+                w.Closed -= onClosed;
+                if (incremented) { DecrementDimmer(); incremented = false; }
+            };
+            w.IsVisibleChanged += OnVis;
+            w.Closed += onClosed;
+        }
+
+        private void IncrementDimmer()
+        {
+            _dimmerCount++;
+            if (_dimmerCount > 0) DialogDimmer.Visibility = Visibility.Visible;
+        }
+
+        private void DecrementDimmer()
+        {
+            _dimmerCount--;
+            if (_dimmerCount <= 0)
+            {
+                _dimmerCount = 0;
+                DialogDimmer.Visibility = Visibility.Collapsed;
+            }
         }
 
         // 누락목록 오버레이 표시 / 백드롭 클릭 시 닫기 / 컨트롤 내부 X 버튼으로 닫기
@@ -1658,6 +1727,11 @@ namespace WpfApp2
                         // 메타 데이터 업데이트
                         meta.Width = newWidth;
                         meta.Height = newHeight;
+                        // 쉬프트 리사이즈로 바뀐 크기를 디자인 다이얼로그의 "버튼 크기" 기본값에도 동기화한다.
+                        // Why: 다이얼로그는 meta.BaseWidth(>0)를 우선 표시하므로 동기화 안하면 옛 값이 보이고
+                        // 적용 시 옛 크기로 되돌아간다.
+                        meta.BaseWidth = newWidth;
+                        meta.BaseHeight = newHeight;
 
                         // 라벨이 있으면 함께 업데이트
                         if (!meta.LabelInside && meta.LabelBlock != null)
@@ -1708,6 +1782,9 @@ namespace WpfApp2
                         // 위치/크기 저장
                         SaveAllButtonStates();
                         e.Handled = true;
+
+                        // 폴더 위에 떨어졌으면 폴더로 이동
+                        TryDropCanvasButtonOnFolder(btn, canvas, meta);
                     }
 
                     isDragging = false;
@@ -2055,14 +2132,14 @@ namespace WpfApp2
             }
             if (existingImg == null)
             {
-                existingImg = new System.Windows.Controls.Image { Stretch = System.Windows.Media.Stretch.Uniform, Width = btn.Width * 0.8, Height = btn.Height * 0.8 };
+                existingImg = new System.Windows.Controls.Image { Stretch = System.Windows.Media.Stretch.Fill, Width = btn.Width * 0.8, Height = btn.Height * 0.8 };
             }
             var grid = btn.Content as System.Windows.Controls.Grid;
             if (grid == null)
             {
-                // create new grid layout
+                // create new grid layout: 이미지(Auto) | 텍스트1(*) | 텍스트2(*)
                 grid = new System.Windows.Controls.Grid();
-                grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
                 grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
                 grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
                 // detach image from Button BEFORE adding as child
@@ -2074,19 +2151,24 @@ namespace WpfApp2
                 System.Windows.Controls.Grid.SetColumnSpan(existingImg, 1);
                 existingImg.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
                 existingImg.VerticalAlignment = System.Windows.VerticalAlignment.Center;
-                existingImg.Margin = new Thickness(15, 0, 0, 0); // 좌측 여백 적용 (기존 6)
+                existingImg.Margin = new Thickness(0);
                 grid.Children.Add(existingImg);
                 btn.Content = grid; // assign new grid
             }
             else
             {
-                // ensure3 columns
+                // ensure 3 columns; 0번은 이미지 크기에 맞춰 Auto, 1·2번은 *
                 if (grid.ColumnDefinitions.Count < 3)
                 {
                     grid.ColumnDefinitions.Clear();
+                    grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
                     grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
                     grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
-                    grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
+                }
+                else
+                {
+                    // 기존 그리드의 0번 칼럼이 *로 설정되어 있으면 Auto로 강제
+                    grid.ColumnDefinitions[0].Width = System.Windows.GridLength.Auto;
                 }
                 if (existingImg.Parent == null)
                 {
@@ -2099,7 +2181,7 @@ namespace WpfApp2
                     System.Windows.Controls.Grid.SetColumnSpan(existingImg, 1);
                     existingImg.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
                     existingImg.VerticalAlignment = System.Windows.VerticalAlignment.Center;
-                    existingImg.Margin = new Thickness(15, 0, 0, 0); // 좌측 여백 적용 (기존 6)
+                    existingImg.Margin = new Thickness(0);
                     grid.Children.Add(existingImg);
                 }
                 else
@@ -2127,9 +2209,13 @@ namespace WpfApp2
             if (grid.ColumnDefinitions.Count < 3)
             {
                 grid.ColumnDefinitions.Clear();
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            }
+            else
+            {
+                grid.ColumnDefinitions[0].Width = GridLength.Auto;
             }
             if (Grid.GetColumn(img) != 0)
             {
@@ -2150,8 +2236,8 @@ namespace WpfApp2
             Grid.SetColumn(t, 1);
             Grid.SetColumnSpan(t, 2);
             t.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
-            // raise text by 3 pixels
-            t.Margin = new Thickness(4, -3, 4, 0);
+            // raise text by 3 pixels — left padding은 이미지-텍스트 간격을 만든다(스타일 2)
+            t.Margin = new Thickness(12, -3, 4, 0);
             t.MaxWidth = btn.Width * 2.0 / 3.0 - 8;
             grid.Children.Add(t);
             meta.InnerLabelBlock = t;
@@ -2159,14 +2245,26 @@ namespace WpfApp2
         // Re-added helper: unwrap inner label and restore plain image content
         private void RemoveInnerLabelAndUnwrap(System.Windows.Controls.Button btn, ButtonMeta meta)
         {
-            if (meta.InnerLabelBlock == null) return; // nothing to unwrap
+            // 그리드 콘텐츠를 단독 이미지로 풀어주는 동시에, 그리드 시절에 적용됐던 잔존 Margin/정렬을 reset
             if (btn.Content is Grid g)
             {
                 var img = GetButtonImageControl(btn);
                 if (img != null)
                 {
                     if (img.Parent is System.Windows.Controls.Panel p) p.Children.Remove(img); // detach using WPF Panel
+                    img.Margin = new Thickness(0);
+                    img.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+                    img.VerticalAlignment = System.Windows.VerticalAlignment.Center;
                     btn.Content = img; // set image as sole content
+                }
+            }
+            else
+            {
+                // 그리드가 아니어도 이미지 단독이면 잔존 Margin을 reset
+                var img = GetButtonImageControl(btn);
+                if (img != null)
+                {
+                    img.Margin = new Thickness(0);
                 }
             }
             meta.InnerLabelBlock = null;
@@ -2250,14 +2348,16 @@ namespace WpfApp2
                 System.Windows.Controls.Canvas.SetLeft(btn, state.X);
                 System.Windows.Controls.Canvas.SetTop(btn, state.Y);
 
-                var meta = new ButtonMeta 
-                { 
-                    Path = state.Path, 
-                    IsFolder = state.IsFolder, 
-                    LabelText = state.LabelText, 
+                var meta = new ButtonMeta
+                {
+                    Path = state.Path,
+                    IsFolder = state.IsFolder,
+                    LabelText = state.LabelText,
                     LabelInside = state.LabelInside,
                     Width = state.Width,
-                    Height = state.Height
+                    Height = state.Height,
+                    BaseWidth = state.BaseWidth,
+                    BaseHeight = state.BaseHeight
                 };
                 btn.Tag = meta;
                 btn.PreviewMouseLeftButtonDown += Btn_PreviewMouseLeftButtonDown;
@@ -2272,7 +2372,7 @@ namespace WpfApp2
                         var restoredImg = new System.Windows.Controls.Image
                         {
                             Source = TryLoadImageSource(state.ImagePath)!,
-                            Stretch = System.Windows.Media.Stretch.Uniform,
+                            Stretch = System.Windows.Media.Stretch.Fill,
                             Width = imgW,
                             Height = imgH
                         };
@@ -2296,7 +2396,24 @@ namespace WpfApp2
 
                 if (!string.IsNullOrWhiteSpace(meta.LabelText))
                 {
-                    if (meta.LabelInside) EnsureOrUpdateInButtonLabel(btn, meta); else EnsureOrUpdateButtonLabel(canvas, btn, meta);
+                    if (meta.LabelInside)
+                    {
+                        EnsureOrUpdateInButtonLabel(btn, meta);
+                        // EnsureGridContentWithImage가 그리드 전환 시 Margin=0으로 리셋하므로
+                        // 텍스트 오른쪽 + 위/아래/왼쪽 위치일 때 통일된 8px 좌측 여백을 복원 시점에 다시 적용.
+                        var insideImg = GetButtonImageControl(btn);
+                        if (insideImg != null)
+                        {
+                            const double inLabelLeftMargin = 8;
+                            if (insideImg.VerticalAlignment == System.Windows.VerticalAlignment.Top)
+                                insideImg.Margin = new Thickness(inLabelLeftMargin, 4, 0, 0);
+                            else if (insideImg.VerticalAlignment == System.Windows.VerticalAlignment.Bottom)
+                                insideImg.Margin = new Thickness(inLabelLeftMargin, 0, 0, 4);
+                            else if (insideImg.HorizontalAlignment == System.Windows.HorizontalAlignment.Left)
+                                insideImg.Margin = new Thickness(inLabelLeftMargin, 0, 0, 0);
+                        }
+                    }
+                    else EnsureOrUpdateButtonLabel(canvas, btn, meta);
                 }
 
                 btn.Click += (s, ev) =>
@@ -2328,103 +2445,12 @@ namespace WpfApp2
                     DeleteButtonWithConfirm(canvas, btn, meta);
                 };
                 var editMenu = new System.Windows.Controls.MenuItem { Header = "버튼수정" };
-                editMenu.Click += (s, ev) =>
-                {
-                    var dlg = new System.Windows.Window
-                    {
-                        Title = "버튼 수정",
-                        WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                        Owner = this,
-                        ResizeMode = System.Windows.ResizeMode.NoResize,
-                        Content = null,
-                        SizeToContent = SizeToContent.WidthAndHeight
-                    };
-                    MakeBorderless(dlg);
-
-                    var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                    var sizeBtn = new System.Windows.Controls.Button { Content = "버튼이미지", Margin = new Thickness(0, 0, 0, 8) };
-                    var pathBtn = new System.Windows.Controls.Button { Content = "경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                    var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트", Margin = new Thickness(0, 0, 0, 8) };
-                    var closeBtn = new System.Windows.Controls.Button { Content = "닫기" };
-                    sizeBtn.Click += (sss, eee) => { dlg.Close(); ShowSizeAdjustDialog(btn, canvas, meta); };
-                    pathBtn.Click += (sss, eee) =>
-                    {
-                        dlg.Close();
-                        var selectDlg = new System.Windows.Window
-                        {
-                            Title = "경로 종류 선택",
-                            WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                            Owner = this,
-                            ResizeMode = System.Windows.ResizeMode.NoResize,
-                            SizeToContent = SizeToContent.WidthAndHeight
-                        };
-                        MakeBorderless(selectDlg);
-
-                        var selectStack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                        var fileBtn = new System.Windows.Controls.Button { Content = "파일 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                        var urlBtn = new System.Windows.Controls.Button { Content = "URL 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                        var folderBtn = new System.Windows.Controls.Button { Content = "폴더 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                        var cancelBtn = new System.Windows.Controls.Button { Content = "취소" };
-                        fileBtn.Click += (fff, ffe) =>
-                        {
-                            selectDlg.Close();
-                            var fd = new Microsoft.Win32.OpenFileDialog { Title = "파일 선택", CheckFileExists = true };
-                            if (fd.ShowDialog() == true)
-                            {
-                                meta.Path = fd.FileName; meta.IsFolder = false; SaveAllButtonStates();
-                            }
-                        };
-                        urlBtn.Click += (fff, ffe) =>
-                        {
-                            selectDlg.Close();
-                            var urlDlg = new System.Windows.Window
-                            {
-                                Title = "URL 입력",
-                                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                                Owner = this,
-                                ResizeMode = System.Windows.ResizeMode.NoResize,
-                                SizeToContent = SizeToContent.WidthAndHeight
-                            };
-                            MakeBorderless(urlDlg);
-                            var stack2 = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                            stack2.Children.Add(new System.Windows.Controls.TextBlock { Text = "URL: (예: https://www.naver.com)", Margin = new Thickness(0,0,0,6) });
-                            var tb = new System.Windows.Controls.TextBox { Text = meta.Path ?? string.Empty, Margin = new Thickness(0,8,0,8), Width = 360 };
-                            var ok = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0) };
-                            var cancel2 = new System.Windows.Controls.Button { Content = "취소" };
-                            var btns = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
-                            ok.Click += (s2, e2) =>
-                            {
-                                var text = tb.Text?.Trim();
-                                if (string.IsNullOrEmpty(text)) { System.Windows.MessageBox.Show("URL을 입력하세요."); return; }
-                                if (!Uri.IsWellFormedUriString(text, UriKind.Absolute)) { System.Windows.MessageBox.Show("올바른 URL 형식이 아닙니다. 예: https://www.naver.com"); return; }
-                                meta.Path = text; meta.IsFolder = false; SaveAllButtonStates(); urlDlg.Close();
-                            };
-                            cancel2.Click += (s2, e2) => urlDlg.Close();
-                            btns.Children.Add(ok); btns.Children.Add(cancel2);
-                            stack2.Children.Add(tb);
-                            stack2.Children.Add(btns);
-                            urlDlg.Content = stack2; ApplyDarkTheme(urlDlg); urlDlg.ShowDialog();
-                        };
-                        folderBtn.Click += (fff, ffe) =>
-                        {
-                            selectDlg.Close();
-                            var folderDialog = new Forms.FolderBrowserDialog();
-                            if (folderDialog.ShowDialog() == Forms.DialogResult.OK)
-                            { meta.Path = folderDialog.SelectedPath; meta.IsFolder = true; SaveAllButtonStates(); }
-                        };
-                        cancelBtn.Click += (s, e) => selectDlg.Close();
-                        selectStack.Children.Add(fileBtn); selectStack.Children.Add(urlBtn); selectStack.Children.Add(folderBtn); selectStack.Children.Add(cancelBtn);
-                        selectDlg.Content = selectStack; ApplyDarkTheme(selectDlg); selectDlg.ShowDialog();
-                    };
-                    textBtn.Click += (sss, eee) => { dlg.Close(); ShowTextInputDialog(btn, canvas, meta); };
-                    closeBtn.Click += (sss, eee) => dlg.Close();
-                    stack.Children.Add(sizeBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
-                    dlg.Content = stack; ApplyDarkTheme(dlg); dlg.ShowDialog();
-                };
+                editMenu.Click += (s, ev) => ShowButtonEditDialog(btn, canvas, meta);
 
                 // MISSING earlier: actually attach menu items and add button to canvas
                 btn.ContextMenu.Items.Add(editMenu);
                 btn.ContextMenu.Items.Add(delMenu);
+                AddMoveToFolderMenu(btn, canvas, meta);
                 canvas.Children.Add(btn);
 
                 // 드래그 앤 드롭 핸들러를 먼저 연결 (Shift 키 체크)
@@ -2485,7 +2511,9 @@ namespace WpfApp2
                                         : (btn.Background as System.Windows.Media.SolidColorBrush)?.Color.ToString()) : null,
                                 CustomFontFamily = btn.ReadLocalValue(System.Windows.Controls.Control.FontFamilyProperty) != DependencyProperty.UnsetValue
                                     ? btn.FontFamily?.Source : null,
-                                BackgroundTransparent = false
+                                BackgroundTransparent = false,
+                                BaseWidth = meta?.BaseWidth ?? 0,
+                                BaseHeight = meta?.BaseHeight ?? 0
                             };
                             list.Add(state);
                         }
@@ -2614,6 +2642,10 @@ namespace WpfApp2
             public System.Windows.Controls.TextBlock? InnerLabelBlock { get; set; }
             public double Width { get; set; }
             public double Height { get; set; }
+            // 사용자가 디자인 다이얼로그에서 입력한 기본 가로/세로.
+            // LabelInside=true && 텍스트가 있을 때 실제 Width는 BaseWidth + 텍스트 너비로 확장됨.
+            public double BaseWidth { get; set; }
+            public double BaseHeight { get; set; }
         }
 
         private sealed class ChartMeta
@@ -2667,23 +2699,19 @@ namespace WpfApp2
             var canvas = GetCanvasFromContextMenuSender(sender) ?? CurrentButtonCanvas;
             if (canvas == null) return;
 
-            const double btnWidth = 54, btnHeight = 54, minGap = 5;
-            double borderW = canvas.ActualWidth > 0 ? canvas.ActualWidth : canvas.RenderSize.Width;
-            double borderH = canvas.ActualHeight > 0 ? canvas.ActualHeight : canvas.RenderSize.Height;
-
-            double usableW = borderW - minGap * 2;
-            double usableH = borderH - minGap * 2;
-            int colCount = Math.Max(1, (int)((usableW + minGap) / (btnWidth + minGap)));
-            int rowCount = Math.Max(1, (int)((usableH + minGap) / (btnHeight + minGap)));
-
-            int btnCount = 0;
-            foreach (UIElement child in canvas.Children)
-                if (child is System.Windows.Controls.Button) btnCount++;
-            int col = btnCount % colCount;
-            int row = btnCount / colCount;
-            if (row >= rowCount) { col = 0; row = 0; }
-            double x = minGap + col * (btnWidth + minGap);
-            double y = minGap + row * (btnHeight + minGap);
+            const double btnWidth = 50, btnHeight = 50;
+            // 우클릭한 마우스 위치를 중심으로 배치. 캔버스 우상단 밖으로 나가지 않게 클램프.
+            double x, y;
+            if (_lastCanvasContextMenuPointValid)
+            {
+                x = _lastCanvasContextMenuPoint.X - btnWidth / 2;
+                y = _lastCanvasContextMenuPoint.Y - btnHeight / 2;
+            }
+            else { x = 5; y = 5; }
+            double maxX = Math.Max(0, canvas.Width - btnWidth);
+            double maxY = Math.Max(0, canvas.Height - btnHeight);
+            x = Math.Max(0, Math.Min(maxX, x));
+            y = Math.Max(0, Math.Min(maxY, y));
 
             var btn = new System.Windows.Controls.Button
             {
@@ -2736,102 +2764,11 @@ namespace WpfApp2
             };
 
             var editMenu = new System.Windows.Controls.MenuItem { Header = "버튼수정" };
-            editMenu.Click += (s, ev) =>
-            {
-                var dlg = new System.Windows.Window
-                {
-                    Title = "버튼 수정",
-                    WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                    Owner = this,
-                    ResizeMode = System.Windows.ResizeMode.NoResize,
-                    Content = null,
-                    SizeToContent = SizeToContent.WidthAndHeight
-                };
-                MakeBorderless(dlg);
-
-                var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                var sizeBtn = new System.Windows.Controls.Button { Content = "버튼이미지", Margin = new Thickness(0, 0, 0, 8) };
-                var pathBtn = new System.Windows.Controls.Button { Content = "경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                var textBtn = new System.Windows.Controls.Button { Content = "버튼텍스트", Margin = new Thickness(0, 0, 0, 8) };
-                var closeBtn = new System.Windows.Controls.Button { Content = "닫기" };
-                sizeBtn.Click += (sss, eee) => { dlg.Close(); ShowSizeAdjustDialog(btn, canvas, meta); };
-                pathBtn.Click += (sss, eee) =>
-                {
-                    dlg.Close();
-                    var selectDlg = new System.Windows.Window
-                    {
-                        Title = "경로 종류 선택",
-                        WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                        Owner = this,
-                        ResizeMode = System.Windows.ResizeMode.NoResize,
-                        SizeToContent = SizeToContent.WidthAndHeight
-                    };
-                    MakeBorderless(selectDlg);
-
-                    var selectStack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                    var fileBtn = new System.Windows.Controls.Button { Content = "파일 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                    var urlBtn = new System.Windows.Controls.Button { Content = "URL 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                    var folderBtn = new System.Windows.Controls.Button { Content = "폴더 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
-                    var cancelBtn = new System.Windows.Controls.Button { Content = "취소" };
-                    fileBtn.Click += (fff, ffe) =>
-                    {
-                        selectDlg.Close();
-                        var fd = new Microsoft.Win32.OpenFileDialog { Title = "파일 선택", CheckFileExists = true };
-                        if (fd.ShowDialog() == true)
-                        {
-                            meta.Path = fd.FileName; meta.IsFolder = false; SaveAllButtonStates();
-                        }
-                    };
-                    urlBtn.Click += (fff, ffe) =>
-                    {
-                        selectDlg.Close();
-                        var urlDlg = new System.Windows.Window
-                        {
-                            Title = "URL 입력",
-                            WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
-                            Owner = this,
-                            ResizeMode = System.Windows.ResizeMode.NoResize,
-                            SizeToContent = SizeToContent.WidthAndHeight
-                        };
-                        MakeBorderless(urlDlg);
-                        var stack2 = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
-                        stack2.Children.Add(new System.Windows.Controls.TextBlock { Text = "URL: (예: https://www.naver.com)", Margin = new Thickness(0,0,0,6) });
-                        var tb = new System.Windows.Controls.TextBox { Text = meta.Path ?? string.Empty, Margin = new Thickness(0,8,0,8), Width = 360 };
-                        var ok = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0) };
-                        var cancel2 = new System.Windows.Controls.Button { Content = "취소" };
-                        var btns = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
-                        ok.Click += (s2, e2) =>
-                        {
-                            var text = tb.Text?.Trim();
-                            if (string.IsNullOrEmpty(text)) { System.Windows.MessageBox.Show("URL을 입력하세요."); return; }
-                            if (!Uri.IsWellFormedUriString(text, UriKind.Absolute)) { System.Windows.MessageBox.Show("올바른 URL 형식이 아닙니다. 예: https://www.naver.com"); return; }
-                            meta.Path = text; meta.IsFolder = false; SaveAllButtonStates(); urlDlg.Close();
-                        };
-                        cancel2.Click += (s2, e2) => urlDlg.Close();
-                        btns.Children.Add(ok); btns.Children.Add(cancel2);
-                        stack2.Children.Add(tb);
-                        stack2.Children.Add(btns);
-                        urlDlg.Content = stack2; ApplyDarkTheme(urlDlg); urlDlg.ShowDialog();
-                    };
-                    folderBtn.Click += (fff, ffe) =>
-                    {
-                        selectDlg.Close();
-                        var folderDialog = new Forms.FolderBrowserDialog();
-                        if (folderDialog.ShowDialog() == Forms.DialogResult.OK)
-                        { meta.Path = folderDialog.SelectedPath; meta.IsFolder = true; SaveAllButtonStates(); }
-                    };
-                    cancelBtn.Click += (s, e) => selectDlg.Close();
-                    selectStack.Children.Add(fileBtn); selectStack.Children.Add(urlBtn); selectStack.Children.Add(folderBtn); selectStack.Children.Add(cancelBtn);
-                    selectDlg.Content = selectStack; ApplyDarkTheme(selectDlg); selectDlg.ShowDialog();
-                };
-                textBtn.Click += (sss, eee) => { dlg.Close(); ShowTextInputDialog(btn, canvas, meta); };
-                closeBtn.Click += (sss, eee) => dlg.Close();
-                stack.Children.Add(sizeBtn); stack.Children.Add(pathBtn); stack.Children.Add(textBtn); stack.Children.Add(closeBtn);
-                dlg.Content = stack; ApplyDarkTheme(dlg); dlg.ShowDialog();
-            };
+            editMenu.Click += (s, ev) => ShowButtonEditDialog(btn, canvas, meta);
 
             btn.ContextMenu.Items.Add(editMenu);
             btn.ContextMenu.Items.Add(delMenu);
+            AddMoveToFolderMenu(btn, canvas, meta);
             canvas.Children.Add(btn);
 
             // 드래그 앤 드롭 핸들러를 먼저 연결 (Shift 키 체크)
@@ -2841,6 +2778,99 @@ namespace WpfApp2
             btn.PreviewMouseLeftButtonDown += Btn_PreviewMouseLeftButtonDown;
 
             SaveAllButtonStates();
+        }
+
+        // 버튼 수정 다이얼로그 (캔버스 버튼 + 폴더 내부 버튼 공용)
+        private void ShowButtonEditDialog(System.Windows.Controls.Button btn, System.Windows.Controls.Canvas canvas, ButtonMeta meta, bool lockSize = false, Action? onChanged = null)
+        {
+            var dlg = new System.Windows.Window
+            {
+                Title = "버튼 수정",
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+                Content = null,
+                SizeToContent = SizeToContent.WidthAndHeight
+            };
+            MakeBorderless(dlg);
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+            var sizeBtn = new System.Windows.Controls.Button { Content = "버튼 디자인", Margin = new Thickness(0, 0, 0, 8) };
+            var pathBtn = new System.Windows.Controls.Button { Content = "경로 설정", Margin = new Thickness(0, 0, 0, 8) };
+            var closeBtn = new System.Windows.Controls.Button { Content = "닫기" };
+            sizeBtn.Click += (sss, eee) => { dlg.Close(); ShowSizeAdjustDialog(btn, canvas, meta, lockSize); onChanged?.Invoke(); };
+            pathBtn.Click += (sss, eee) =>
+            {
+                dlg.Close();
+                var selectDlg = new System.Windows.Window
+                {
+                    Title = "경로 종류 선택",
+                    WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                    Owner = this,
+                    ResizeMode = System.Windows.ResizeMode.NoResize,
+                    SizeToContent = SizeToContent.WidthAndHeight
+                };
+                MakeBorderless(selectDlg);
+
+                var selectStack = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+                var fileBtn = new System.Windows.Controls.Button { Content = "파일 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
+                var urlBtn = new System.Windows.Controls.Button { Content = "URL 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
+                var folderBtn = new System.Windows.Controls.Button { Content = "폴더 경로 설정", Margin = new Thickness(0, 0, 0, 8) };
+                var cancelBtn = new System.Windows.Controls.Button { Content = "취소" };
+                fileBtn.Click += (fff, ffe) =>
+                {
+                    selectDlg.Close();
+                    var fd = new Microsoft.Win32.OpenFileDialog { Title = "파일 선택", CheckFileExists = true };
+                    if (fd.ShowDialog() == true)
+                    {
+                        meta.Path = fd.FileName; meta.IsFolder = false; SaveAllButtonStates(); onChanged?.Invoke();
+                    }
+                };
+                urlBtn.Click += (fff, ffe) =>
+                {
+                    selectDlg.Close();
+                    var urlDlg = new System.Windows.Window
+                    {
+                        Title = "URL 입력",
+                        WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                        Owner = this,
+                        ResizeMode = System.Windows.ResizeMode.NoResize,
+                        SizeToContent = SizeToContent.WidthAndHeight
+                    };
+                    MakeBorderless(urlDlg);
+                    var stack2 = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+                    stack2.Children.Add(new System.Windows.Controls.TextBlock { Text = "URL: (예: https://www.naver.com)", Margin = new Thickness(0,0,0,6) });
+                    var tb = new System.Windows.Controls.TextBox { Text = meta.Path ?? string.Empty, Margin = new Thickness(0,8,0,8), Width = 360 };
+                    var ok = new System.Windows.Controls.Button { Content = "적용", Margin = new Thickness(0, 0, 8, 0) };
+                    var cancel2 = new System.Windows.Controls.Button { Content = "취소" };
+                    var btns = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+                    ok.Click += (s2, e2) =>
+                    {
+                        var text = tb.Text?.Trim();
+                        if (string.IsNullOrEmpty(text)) { System.Windows.MessageBox.Show("URL을 입력하세요."); return; }
+                        if (!Uri.IsWellFormedUriString(text, UriKind.Absolute)) { System.Windows.MessageBox.Show("올바른 URL 형식이 아닙니다. 예: https://www.naver.com"); return; }
+                        meta.Path = text; meta.IsFolder = false; SaveAllButtonStates(); onChanged?.Invoke(); urlDlg.Close();
+                    };
+                    cancel2.Click += (s2, e2) => urlDlg.Close();
+                    btns.Children.Add(ok); btns.Children.Add(cancel2);
+                    stack2.Children.Add(tb);
+                    stack2.Children.Add(btns);
+                    urlDlg.Content = stack2; ApplyDarkTheme(urlDlg); urlDlg.ShowDialog();
+                };
+                folderBtn.Click += (fff, ffe) =>
+                {
+                    selectDlg.Close();
+                    var folderDialog = new Forms.FolderBrowserDialog();
+                    if (folderDialog.ShowDialog() == Forms.DialogResult.OK)
+                    { meta.Path = folderDialog.SelectedPath; meta.IsFolder = true; SaveAllButtonStates(); onChanged?.Invoke(); }
+                };
+                cancelBtn.Click += (s, e) => selectDlg.Close();
+                selectStack.Children.Add(fileBtn); selectStack.Children.Add(urlBtn); selectStack.Children.Add(folderBtn); selectStack.Children.Add(cancelBtn);
+                selectDlg.Content = selectStack; ApplyDarkTheme(selectDlg); selectDlg.ShowDialog();
+            };
+            closeBtn.Click += (sss, eee) => dlg.Close();
+            stack.Children.Add(sizeBtn); stack.Children.Add(pathBtn); stack.Children.Add(closeBtn);
+            dlg.Content = stack; ApplyDarkTheme(dlg); dlg.ShowDialog();
         }
 
         private void CreateChartInBorder_Click(object sender, RoutedEventArgs e)
@@ -5245,12 +5275,13 @@ ORDER BY 날짜 DESC";
             System.Windows.Controls.DockPanel.SetDock(btnBarBorder, System.Windows.Controls.Dock.Bottom);
             outerDock.Children.Add(btnBarBorder);
 
-            // 스크롤 콘텐츠
+            // 스크롤 콘텐츠 — Border와 동일한 슬림 스크롤바 스타일 적용
             var sv3 = new System.Windows.Controls.ScrollViewer
             {
                 VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
             };
+            ApplySubtleScrollBarStyle(sv3);
             var mainStack = new System.Windows.Controls.StackPanel { Margin = new Thickness(14, 10, 14, 6) };
             sv3.Content = mainStack;
             outerDock.Children.Add(sv3);
@@ -6769,6 +6800,18 @@ ORDER BY 값 {sortDir}";
             return FindName($"ButtonCanvas{index + 1}") as Canvas;
         }
 
+        // 캔버스가 들어있는 ScrollViewer 조상을 찾는다. 보이는 영역 크기를 알아야 빈 위치를 시야 안에 배치할 수 있다.
+        private static System.Windows.Controls.ScrollViewer? FindScrollViewerAncestor(System.Windows.DependencyObject d)
+        {
+            var p = System.Windows.Media.VisualTreeHelper.GetParent(d);
+            while (p != null)
+            {
+                if (p is System.Windows.Controls.ScrollViewer sv) return sv;
+                p = System.Windows.Media.VisualTreeHelper.GetParent(p);
+            }
+            return null;
+        }
+
         private Canvas? GetCanvasFromContextMenuSender(object sender)
         {
             if (sender is MenuItem menuItem &&
@@ -6832,9 +6875,25 @@ ORDER BY 값 {sortDir}";
             ripple.BeginAnimation(UIElement.OpacityProperty, fade);
         }
 
+        // 캔버스 우클릭 메뉴가 열린 시점의 마우스 위치(캔버스 좌표계). 버튼/폴더 생성 시 이 위치에 배치.
+        private System.Windows.Point _lastCanvasContextMenuPoint;
+        private bool _lastCanvasContextMenuPointValid;
+
         private void DynamicButtonBorder_ContextMenuOpening(object sender, ContextMenuEventArgs e)
         {
             CurrentButtonCanvas?.UpdateLayout();
+            _lastCanvasContextMenuPointValid = false;
+            if (sender is System.Windows.Controls.Border b)
+            {
+                System.Windows.Controls.Canvas? c = null;
+                if (b.Child is System.Windows.Controls.Canvas direct) c = direct;
+                else if (b.Child is System.Windows.Controls.ScrollViewer sv && sv.Content is System.Windows.Controls.Canvas scc) c = scc;
+                if (c != null)
+                {
+                    _lastCanvasContextMenuPoint = System.Windows.Input.Mouse.GetPosition(c);
+                    _lastCanvasContextMenuPointValid = true;
+                }
+            }
         }
 
         private void ApplyDarkTheme(Window dlg)
@@ -7101,7 +7160,7 @@ ORDER BY 값 {sortDir}";
             posDlg.ShowDialog();
         }
 
-        private void ShowSizeAdjustDialog(System.Windows.Controls.Button targetBtn, System.Windows.Controls.Canvas canvas, ButtonMeta meta)
+        private void ShowSizeAdjustDialog(System.Windows.Controls.Button targetBtn, System.Windows.Controls.Canvas canvas, ButtonMeta meta, bool lockSize = false)
         {
             var sizeDlg = new System.Windows.Window
             {
@@ -7119,47 +7178,254 @@ ORDER BY 값 {sortDir}";
             rootGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(40) });
             rootGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
 
-            // 왼쪽 패널: 버튼 크기 + 미리보기
-            var leftPanel = new System.Windows.Controls.StackPanel();
-            leftPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "버튼 크기", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 0, 0, 8) });
-            var wBox2 = new System.Windows.Controls.TextBox { Text = targetBtn.Width.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
-            var hBox2 = new System.Windows.Controls.TextBox { Text = targetBtn.Height.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
-            leftPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:" });
-            leftPanel.Children.Add(wBox2);
-            leftPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:" });
-            leftPanel.Children.Add(hBox2);
+            // 좌·우 컬럼 패널과 의미별 섹션 컨테이너
+            var leftPanel = new System.Windows.Controls.StackPanel { MinWidth = 220 };
+            var rightPanel = new System.Windows.Controls.StackPanel { MinWidth = 260 };
+            var btnSec = new System.Windows.Controls.StackPanel();       // 버튼 (크기 + 배경색)
+            var previewSec = new System.Windows.Controls.StackPanel();   // 미리보기
+            var imgSec = new System.Windows.Controls.StackPanel();       // 이미지 (선택 + 크기)
+            var txtSec = new System.Windows.Controls.StackPanel();       // 텍스트 (입력/스타일/글꼴/크기/글씨색)
 
-            // 미리보기 영역
-            var previewBorder = new System.Windows.Controls.Border 
-            { 
-                Width = 120, 
-                Height = 120, 
+            // 섹션 카드 헬퍼: 헤더 + 본문을 Border로 감싸 시각적 그룹화
+            Border MakeSectionCard(string header, System.Windows.Controls.StackPanel body)
+            {
+                var outer = new System.Windows.Controls.StackPanel();
+                outer.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = header,
+                    FontWeight = System.Windows.FontWeights.Bold,
+                    FontSize = 13,
+                    Foreground = System.Windows.Media.Brushes.White,
+                    Margin = new System.Windows.Thickness(0, 0, 0, 8)
+                });
+                outer.Children.Add(body);
+                return new Border
+                {
+                    BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 85, 85)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(10),
+                    Margin = new Thickness(0, 0, 0, 10),
+                    Child = outer
+                };
+            }
+
+            // 섹션 내 소제목 (배경색 / 글씨색 / 글꼴 등)
+            System.Windows.Controls.TextBlock SubHeader(string text, double top = 8) =>
+                new System.Windows.Controls.TextBlock
+                {
+                    Text = text,
+                    FontWeight = System.Windows.FontWeights.SemiBold,
+                    Margin = new System.Windows.Thickness(0, top, 0, 4)
+                };
+
+            double initWidthText = meta.BaseWidth > 0 ? meta.BaseWidth : targetBtn.Width;
+            double initHeightText = meta.BaseHeight > 0 ? meta.BaseHeight : targetBtn.Height;
+            var wBox2 = new System.Windows.Controls.TextBox { Text = initWidthText.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
+            var hBox2 = new System.Windows.Controls.TextBox { Text = initHeightText.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
+            btnSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "너비:" });
+            btnSec.Children.Add(wBox2);
+            btnSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "높이:" });
+            btnSec.Children.Add(hBox2);
+            if (lockSize)
+            {
+                // 폴더 내부: 크기 고정 표시
+                wBox2.Text = "50"; hBox2.Text = "50";
+                wBox2.IsEnabled = false; hBox2.IsEnabled = false;
+                wBox2.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(140, 140, 140));
+                hBox2.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(140, 140, 140));
+            }
+
+            // 미리보기 영역: 외곽 박스(120x120)는 고정, 안쪽 buttonBox만 실제 버튼 크기에 맞춰 배경색 표시
+            var previewBorder = new System.Windows.Controls.Border
+            {
+                Width = 180,
+                Height = 120,
                 BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70)),
                 BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(2),
                 Margin = new System.Windows.Thickness(0, 8, 0, 8),
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50))
             };
-            var previewImage = new System.Windows.Controls.Image 
-            { 
-                Stretch = System.Windows.Media.Stretch.Uniform,
+            // 외곽 정렬용 (중앙에 buttonBox, 그 아래로 외부 라벨)
+            var previewOuter = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            };
+            // 실제 버튼 시뮬레이션 영역 (배경색이 칠해지는 영역)
+            var previewButtonBox = new System.Windows.Controls.Border
+            {
+                Width = targetBtn.Width > 0 ? targetBtn.Width : 50,
+                Height = targetBtn.Height > 0 ? targetBtn.Height : 50,
+                CornerRadius = new CornerRadius(2),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                ClipToBounds = true,
+            };
+            var previewGrid = new System.Windows.Controls.Grid();
+            var previewImage = new System.Windows.Controls.Image
+            {
+                Stretch = System.Windows.Media.Stretch.Fill,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
                 VerticalAlignment = System.Windows.VerticalAlignment.Center
             };
+            // 안쪽 라벨 (LabelInside=true 일 때만 표시) — 이미지 오른쪽
+            var previewInnerLabel = new System.Windows.Controls.TextBlock
+            {
+                TextAlignment = TextAlignment.Left,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                IsHitTestVisible = false,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+            };
+            previewGrid.Children.Add(previewImage);
+            previewGrid.Children.Add(previewInnerLabel);
+            previewButtonBox.Child = previewGrid;
+
+            // 외부 라벨 (LabelInside=false 일 때만 표시) — 배경 박스 밖, 아래쪽
+            var previewOuterLabel = new System.Windows.Controls.TextBlock
+            {
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                IsHitTestVisible = false,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(0, 2, 0, 0),
+            };
+
+            previewOuter.Children.Add(previewButtonBox);
+            previewOuter.Children.Add(previewOuterLabel);
+            previewBorder.Child = previewOuter;
+
             var currentImg = GetButtonImageControl(targetBtn);
             if (currentImg?.Source != null)
             {
                 previewImage.Source = currentImg.Source;
             }
-            previewBorder.Child = previewImage;
-            leftPanel.Children.Add(previewBorder);
+            previewSec.Children.Add(previewBorder);
 
-            // 이미지 선택 버튼
-            var selectImageBtn = new System.Windows.Controls.Button 
-            { 
-                Content = "이미지 선택", 
+            // 이미지 선택 버튼 (이미지 섹션 최상단)
+            var selectImageBtn = new System.Windows.Controls.Button
+            {
+                Content = "이미지 선택",
                 Margin = new System.Windows.Thickness(0, 0, 0, 8),
                 Padding = new Thickness(8, 4, 8, 4)
             };
+            imgSec.Children.Add(selectImageBtn);
+
+            // ── 버튼 텍스트 입력 ──
+            txtSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "버튼 텍스트:", Margin = new System.Windows.Thickness(0, 0, 0, 4) });
+            var labelTextBox = new System.Windows.Controls.TextBox
+            {
+                Text = meta.LabelText ?? string.Empty,
+                Width = 160,
+                Margin = new System.Windows.Thickness(0, 0, 0, 6),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+            };
+            txtSec.Children.Add(labelTextBox);
+
+            // ── 스타일 선택 (2종) ──
+            // 스타일 1: 텍스트 = 버튼 밑, 이미지 = 중앙
+            // 스타일 2: 텍스트 = 이미지 오른쪽, 이미지 = 왼쪽
+            // 내부적으로는 기존 변수(currentLabelPos, current2)를 그대로 사용하여
+            // 적용/미리보기 로직 변경을 최소화한다.
+            txtSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "스타일:", Margin = new System.Windows.Thickness(0, 0, 0, 4) });
+            var styleWrap = new System.Windows.Controls.WrapPanel { Margin = new System.Windows.Thickness(0, 0, 0, 8) };
+            string currentLabelPos = meta.LabelInside ? "이미지 오른쪽" : "버튼 밑";
+            string current2 = meta.LabelInside ? "왼쪽" : "중앙";
+            string currentStyle = meta.LabelInside ? "스타일 2" : "스타일 1";
+            var styleButtons = new System.Collections.Generic.List<System.Windows.Controls.Button>();
+            var styleNormalBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(58, 58, 58));
+            var styleSelectedBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(110, 110, 110));
+            var styleSelectedBorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White);
+            void UpdateStyleButtonStyles()
+            {
+                foreach (var b in styleButtons)
+                {
+                    bool sel = (string)b.Tag == currentStyle;
+                    b.Background = sel ? styleSelectedBrush : styleNormalBrush;
+                    b.BorderThickness = sel ? new Thickness(2) : new Thickness(1);
+                    b.BorderBrush = sel ? styleSelectedBorderBrush : styleNormalBrush;
+                    b.FontWeight = sel ? FontWeights.Bold : FontWeights.Normal;
+                    b.Foreground = System.Windows.Media.Brushes.White;
+                }
+            }
+            // 스타일을 어떤 모양인지 직관적으로 보여주는 미니 아이콘 빌더
+            // textBelow=true → 사각형 위, 선 아래 (스타일 1)
+            // textBelow=false → 사각형 왼쪽, 선 오른쪽 (스타일 2)
+            System.Windows.Controls.StackPanel BuildStyleIcon(bool textBelow)
+            {
+                var iconBrush = System.Windows.Media.Brushes.White;
+                var sp = new System.Windows.Controls.StackPanel
+                {
+                    Orientation = textBelow ? System.Windows.Controls.Orientation.Vertical : System.Windows.Controls.Orientation.Horizontal,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                    VerticalAlignment = System.Windows.VerticalAlignment.Center
+                };
+                var imgBox = new System.Windows.Controls.Border
+                {
+                    Width = 16,
+                    Height = 16,
+                    Background = iconBrush,
+                    CornerRadius = new System.Windows.CornerRadius(2),
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                    VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                    Margin = textBelow ? new Thickness(0, 0, 0, 4) : new Thickness(0, 0, 5, 0)
+                };
+                var txtBar = new System.Windows.Controls.Border
+                {
+                    Width = textBelow ? 24 : 20,
+                    Height = 3,
+                    Background = iconBrush,
+                    CornerRadius = new System.Windows.CornerRadius(1.5),
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                    VerticalAlignment = System.Windows.VerticalAlignment.Center
+                };
+                sp.Children.Add(imgBox);
+                sp.Children.Add(txtBar);
+                return sp;
+            }
+
+            (string key, bool textBelow)[] styleDefs =
+            {
+                ("스타일 1", true),
+                ("스타일 2", false)
+            };
+            foreach (var (key, textBelow) in styleDefs)
+            {
+                var b = new System.Windows.Controls.Button
+                {
+                    Content = BuildStyleIcon(textBelow),
+                    Tag = key,
+                    ToolTip = textBelow ? "스타일 1: 텍스트 아래 / 이미지 중앙" : "스타일 2: 텍스트 오른쪽 / 이미지 왼쪽",
+                    Margin = new System.Windows.Thickness(0, 0, 6, 0),
+                    MinWidth = 70,
+                    MinHeight = 44,
+                    Padding = new Thickness(8, 4, 8, 4)
+                };
+                b.Click += (s, e) =>
+                {
+                    currentStyle = key;
+                    if (key == "스타일 1") { currentLabelPos = "버튼 밑"; current2 = "중앙"; }
+                    else { currentLabelPos = "이미지 오른쪽"; current2 = "왼쪽"; }
+
+                    // 스타일별 권장 가로 크기 자동 적용 (사용자는 이후에 자유롭게 수정 가능)
+                    //   스타일 1: 가로 = 세로 (정사각형)
+                    //   스타일 2: 가로 = 세로 × 2 (텍스트가 옆에 들어갈 공간)
+                    if (!lockSize && double.TryParse(hBox2.Text, out var hVal) && hVal > 0)
+                    {
+                        double newW = key == "스타일 1" ? hVal : hVal * 2;
+                        wBox2.Text = newW.ToString();
+                    }
+
+                    UpdateStyleButtonStyles();
+                };
+                styleButtons.Add(b);
+                styleWrap.Children.Add(b);
+            }
+            UpdateStyleButtonStyles();
+            txtSec.Children.Add(styleWrap);
             selectImageBtn.Click += (s, e) =>
             {
                 var dialog = new Microsoft.Win32.OpenFileDialog
@@ -7182,54 +7448,23 @@ ORDER BY 값 {sortDir}";
                     }
                 }
             };
-            leftPanel.Children.Add(selectImageBtn);
 
-            var rightPanel = new System.Windows.Controls.StackPanel();
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 크기 및 위치", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 0, 0, 8) });
+            // rightPanel은 위에서 이미 만들었음
             var imgRef = GetButtonImageControl(targetBtn);
-            double initImgW2 = imgRef?.Width > 0 ? imgRef.Width : targetBtn.Width * 0.8;
-            double initImgH2 = imgRef?.Height > 0 ? imgRef.Height : targetBtn.Height * 0.8;
+            // 명시적 Width가 있으면 그대로, 없으면 현재 렌더된 ActualWidth로 폴백.
+            // Why: 위치만 변경해도 크기가 자동으로 줄어드는 문제 방지(폴백 0.8x가 의도치 않게 적용됨).
+            double initImgW2 = (imgRef != null && !double.IsNaN(imgRef.Width) && imgRef.Width > 0) ? imgRef.Width
+                             : (imgRef != null && imgRef.ActualWidth > 0) ? imgRef.ActualWidth
+                             : targetBtn.Width * 0.8;
+            double initImgH2 = (imgRef != null && !double.IsNaN(imgRef.Height) && imgRef.Height > 0) ? imgRef.Height
+                             : (imgRef != null && imgRef.ActualHeight > 0) ? imgRef.ActualHeight
+                             : targetBtn.Height * 0.8;
             var iwBox2 = new System.Windows.Controls.TextBox { Text = initImgW2.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
             var ihBox2 = new System.Windows.Controls.TextBox { Text = initImgH2.ToString(), Width = 80, Margin = new System.Windows.Thickness(0, 0, 0, 8) };
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 너비:" });
-            rightPanel.Children.Add(iwBox2);
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 높이:" });
-            rightPanel.Children.Add(ihBox2);
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "위치 선택:", Margin = new System.Windows.Thickness(0, 8, 0, 4) });
-            var posWrap2 = new System.Windows.Controls.WrapPanel { HorizontalAlignment = System.Windows.HorizontalAlignment.Left };
-            string[] posNames2 = { "중앙", "위", "아래", "왼쪽", "오른쪽" };
-            var posButtons2 = new System.Collections.Generic.List<System.Windows.Controls.Button>();
-
-            // 기본값은 항상 중앙, 기존 이미지가 있을 경우에만 해당 위치로 설정
-            string current2 = "중앙";
-            if (imgRef != null && imgRef.Source != null)
-            {
-                if (imgRef.VerticalAlignment == System.Windows.VerticalAlignment.Top) current2 = "위";
-                else if (imgRef.VerticalAlignment == System.Windows.VerticalAlignment.Bottom) current2 = "아래";
-                else if (imgRef.HorizontalAlignment == System.Windows.HorizontalAlignment.Left) current2 = "왼쪽";
-                else if (imgRef.HorizontalAlignment == System.Windows.HorizontalAlignment.Right) current2 = "오른쪽";
-            }
-            var normalBrush2 = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(70, 70, 70));
-            var selectedBrush2 = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(110, 110, 110));
-            void UpdateButtonStyles2()
-            {
-                foreach (var b in posButtons2)
-                {
-                    bool sel = (string)b.Content == current2;
-                    b.Background = sel ? selectedBrush2 : normalBrush2;
-                    b.BorderThickness = sel ? new Thickness(2) : new Thickness(0);
-                    b.BorderBrush = sel ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(160, 160, 160)) : null;
-                }
-            }
-            foreach (var p in posNames2)
-            {
-                var b = new System.Windows.Controls.Button { Content = p, Margin = new System.Windows.Thickness(0, 0, 8, 8), MinWidth = 60, Padding = new System.Windows.Thickness(8, 4, 8, 4) };
-                b.Click += (s, e) => { current2 = p; UpdateButtonStyles2(); };
-                posButtons2.Add(b);
-                posWrap2.Children.Add(b);
-            }
-            rightPanel.Children.Add(posWrap2);
-            UpdateButtonStyles2();
+            imgSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 너비:" });
+            imgSec.Children.Add(iwBox2);
+            imgSec.Children.Add(new System.Windows.Controls.TextBlock { Text = "이미지 높이:" });
+            imgSec.Children.Add(ihBox2);
 
             // ── 배경색 ──────────────────────────────────────────────
             string? selectedBgColor = targetBtn.ReadLocalValue(System.Windows.Controls.Control.BackgroundProperty) != DependencyProperty.UnsetValue
@@ -7237,7 +7472,7 @@ ORDER BY 값 {sortDir}";
                     : (targetBtn.Background as System.Windows.Media.SolidColorBrush)?.Color.ToString())
                 : null;
 
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "배경색", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 8, 0, 4) });
+            btnSec.Children.Add(SubHeader("배경색"));
 
             var bgWrap = new System.Windows.Controls.WrapPanel { Margin = new System.Windows.Thickness(0, 0, 0, 4) };
             var bgSwatches = new System.Collections.Generic.List<System.Windows.Controls.Border>();
@@ -7301,7 +7536,7 @@ ORDER BY 값 {sortDir}";
                 var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
                 AddBgSwatch(hex, name, new System.Windows.Media.SolidColorBrush(c));
             }
-            rightPanel.Children.Add(bgWrap);
+            btnSec.Children.Add(bgWrap);
             RefreshBgSwatchBorders();
 
             // ── 글씨색 ──────────────────────────────────────────────
@@ -7309,7 +7544,7 @@ ORDER BY 값 {sortDir}";
                 ? (targetBtn.Foreground as System.Windows.Media.SolidColorBrush)?.Color.ToString()
                 : null;
 
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "글씨색", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 4, 0, 4) });
+            txtSec.Children.Add(SubHeader("글씨색"));
 
             var fgWrap = new System.Windows.Controls.WrapPanel { Margin = new System.Windows.Thickness(0, 0, 0, 4) };
             var fgSwatches = new System.Collections.Generic.List<System.Windows.Controls.Border>();
@@ -7344,14 +7579,18 @@ ORDER BY 값 {sortDir}";
                 var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
                 AddFgSwatch(hex, name, new System.Windows.Media.SolidColorBrush(c));
             }
-            rightPanel.Children.Add(fgWrap);
+            txtSec.Children.Add(fgWrap);
             RefreshFgSwatchBorders();
 
             // ── 글꼴 ────────────────────────────────────────────────
             string? selectedFontFamily = targetBtn.ReadLocalValue(System.Windows.Controls.Control.FontFamilyProperty) != DependencyProperty.UnsetValue
                 ? targetBtn.FontFamily?.Source : null;
+            // selectedFontSize는 fontCombo의 이벤트 람다(→ UpdatePreview)에서 간접 참조되므로 먼저 선언
+            double? selectedFontSize = targetBtn.ReadLocalValue(System.Windows.Controls.Control.FontSizeProperty) != DependencyProperty.UnsetValue
+                ? targetBtn.FontSize
+                : (double?)null;
 
-            rightPanel.Children.Add(new System.Windows.Controls.TextBlock { Text = "글꼴", FontWeight = System.Windows.FontWeights.Bold, Margin = new System.Windows.Thickness(0, 4, 0, 4) });
+            txtSec.Children.Add(SubHeader("글꼴"));
             var fontRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
             var darkComboBg = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(50, 50, 50));
             var darkComboHover = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(75, 75, 75));
@@ -7381,17 +7620,62 @@ ORDER BY 값 {sortDir}";
             selectedTrigger.Setters.Add(new Setter(System.Windows.Controls.ComboBoxItem.BackgroundProperty, darkComboHover));
             comboItemStyle.Triggers.Add(selectedTrigger);
             fontCombo.ItemContainerStyle = comboItemStyle;
+
+            // 각 항목을 해당 폰트로 렌더링: TextBlock의 Text/FontFamily 모두 item(string)에 바인딩.
+            // FontFamilyProperty는 FontFamilyConverter가 string을 자동 변환해 준다.
+            var fontItemTemplate = new System.Windows.DataTemplate(typeof(string));
+            var tbFactory = new System.Windows.FrameworkElementFactory(typeof(System.Windows.Controls.TextBlock));
+            tbFactory.SetBinding(System.Windows.Controls.TextBlock.TextProperty, new System.Windows.Data.Binding());
+            tbFactory.SetBinding(System.Windows.Controls.TextBlock.FontFamilyProperty, new System.Windows.Data.Binding());
+            tbFactory.SetValue(System.Windows.Controls.TextBlock.FontSizeProperty, 14.0);
+            fontItemTemplate.VisualTree = tbFactory;
+            fontCombo.ItemTemplate = fontItemTemplate;
+
             string[] preferredFonts = { "Malgun Gothic", "맑은 고딕", "Gulim", "굴림", "Dotum", "돋움", "Batang", "바탕", "Segoe UI", "Arial", "Tahoma", "Consolas" };
             foreach (var f in preferredFonts) fontCombo.Items.Add(f);
             fontCombo.Text = selectedFontFamily ?? "";
             fontCombo.SelectionChanged += (s2, _) => { selectedFontFamily = string.IsNullOrWhiteSpace(fontCombo.Text) ? null : fontCombo.Text; };
             fontCombo.LostFocus += (s2, _) => { selectedFontFamily = string.IsNullOrWhiteSpace(fontCombo.Text) ? null : fontCombo.Text; };
+            // IsEditable=true 콤보에서 사용자가 직접 텍스트를 입력할 때 즉시 반영되도록 내부 TextBox의
+            // TextChanged 이벤트를 라우팅으로 수신한다. SelectionChanged/LostFocus만으로는 타이핑 중 갱신 안 됨.
+            fontCombo.AddHandler(
+                System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+                new System.Windows.Controls.TextChangedEventHandler((_, _) =>
+                {
+                    selectedFontFamily = string.IsNullOrWhiteSpace(fontCombo.Text) ? null : fontCombo.Text;
+                    UpdatePreview();
+                }));
 
             var fontDefaultBtn = new System.Windows.Controls.Button { Content = "기본값", Margin = new System.Windows.Thickness(6, 0, 0, 0), Padding = new System.Windows.Thickness(6, 2, 6, 2) };
-            fontDefaultBtn.Click += (s2, _) => { selectedFontFamily = null; fontCombo.Text = ""; };
+            fontDefaultBtn.Click += (s2, _) => { selectedFontFamily = null; fontCombo.Text = ""; UpdatePreview(); };
             fontRow.Children.Add(fontCombo);
             fontRow.Children.Add(fontDefaultBtn);
-            rightPanel.Children.Add(fontRow);
+            txtSec.Children.Add(fontRow);
+
+            // ── 글씨 크기 (변수는 위에서 미리 선언) ──────────────────────
+            txtSec.Children.Add(SubHeader("글씨 크기"));
+            var sizeRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            var sizeBox = new System.Windows.Controls.TextBox
+            {
+                Text = selectedFontSize?.ToString() ?? "",
+                Width = 60,
+                Height = 26
+            };
+            var sizeDefaultBtn = new System.Windows.Controls.Button { Content = "기본값", Margin = new System.Windows.Thickness(6, 0, 0, 0), Padding = new System.Windows.Thickness(6, 2, 6, 2) };
+            sizeBox.TextChanged += (s2, _) =>
+            {
+                selectedFontSize = double.TryParse(sizeBox.Text, out var sv) && sv > 0 ? sv : (double?)null;
+            };
+            sizeDefaultBtn.Click += (s2, _) => { selectedFontSize = null; sizeBox.Text = ""; };
+            sizeRow.Children.Add(sizeBox);
+            sizeRow.Children.Add(sizeDefaultBtn);
+            txtSec.Children.Add(sizeRow);
+
+            // 섹션 카드들을 컬럼에 배치
+            leftPanel.Children.Add(MakeSectionCard("버튼", btnSec));
+            leftPanel.Children.Add(MakeSectionCard("미리보기", previewSec));
+            rightPanel.Children.Add(MakeSectionCard("이미지", imgSec));
+            rightPanel.Children.Add(MakeSectionCard("텍스트", txtSec));
 
             System.Windows.Controls.Grid.SetColumn(leftPanel, 0); System.Windows.Controls.Grid.SetColumn(rightPanel, 2);
             rootGrid.Children.Add(leftPanel); rootGrid.Children.Add(rightPanel);
@@ -7416,12 +7700,23 @@ ORDER BY 값 {sortDir}";
                     {
                         var imgCtrl = GetButtonImageControl(targetBtn) ?? new System.Windows.Controls.Image();
                         imgCtrl.Source = previewImage.Source;
-                        imgCtrl.Stretch = System.Windows.Media.Stretch.Uniform;
+                        imgCtrl.Stretch = System.Windows.Media.Stretch.Fill;
                     }
+
+                    // 텍스트/라벨 위치를 먼저 meta에 적용 (ApplyImageSizeAndPosition이 이 값을 참조하므로 순서 중요)
+                    meta.LabelText = labelTextBox.Text;
+                    meta.LabelInside = (currentLabelPos == "이미지 오른쪽");
 
                     double bw, bh, iw, ih;
                     double? nbw = double.TryParse(wBox2.Text, out bw) ? bw : (double?)null;
                     double? nbh = double.TryParse(hBox2.Text, out bh) ? bh : (double?)null;
+                    if (lockSize) { nbw = null; nbh = null; } // 폴더 내부: 크기 변경 무시
+
+                    // 사용자가 입력한 기본 너비/높이를 meta.BaseWidth/Height에 저장 (보존)
+                    if (nbw.HasValue) meta.BaseWidth = nbw.Value;
+                    if (nbh.HasValue) meta.BaseHeight = nbh.Value;
+                    // 사용자가 입력한 너비를 그대로 적용. 스타일 2(LabelInside=true)에서도 자동 확장하지 않음.
+
                     iw = double.TryParse(iwBox2.Text, out var iwt) ? iwt : (GetButtonImageControl(targetBtn)?.Width ?? targetBtn.Width * 0.8);
                     ih = double.TryParse(ihBox2.Text, out var iht) ? iht : (GetButtonImageControl(targetBtn)?.Height ?? targetBtn.Height * 0.8);
                     ApplyImageSizeAndPosition(targetBtn, canvas, meta, nbw, nbh, iw, ih, current2);
@@ -7452,6 +7747,34 @@ ORDER BY 값 {sortDir}";
                     else
                         targetBtn.FontFamily = new System.Windows.Media.FontFamily(selectedFontFamily);
 
+                    // 글씨 크기 적용
+                    if (selectedFontSize == null)
+                        targetBtn.ClearValue(System.Windows.Controls.Control.FontSizeProperty);
+                    else
+                        targetBtn.FontSize = selectedFontSize.Value;
+
+                    // 라벨 처리 후속: 위치가 바깥(버튼 밑)이고 텍스트가 있으면 외부 라벨 갱신.
+                    // 안쪽(이미지 오른쪽)의 경우는 ApplyImageSizeAndPosition이 이미 그리드/단독 분기를 처리함.
+                    if (!meta.LabelInside)
+                    {
+                        if (!string.IsNullOrWhiteSpace(meta.LabelText))
+                            EnsureOrUpdateButtonLabel(canvas, targetBtn, meta);
+                        else if (meta.LabelBlock != null && canvas.Children.Contains(meta.LabelBlock))
+                        {
+                            canvas.Children.Remove(meta.LabelBlock);
+                            meta.LabelBlock = null;
+                        }
+                    }
+                    else
+                    {
+                        // 외부 라벨 블록이 남아있으면 정리
+                        if (meta.LabelBlock != null && canvas.Children.Contains(meta.LabelBlock))
+                        {
+                            canvas.Children.Remove(meta.LabelBlock);
+                            meta.LabelBlock = null;
+                        }
+                    }
+
                     SaveAllButtonStates();
                     sizeDlg.Close();
                 }
@@ -7462,8 +7785,204 @@ ORDER BY 값 {sortDir}";
                 }
             };
             cancelBtn22.Click += (s, e) => sizeDlg.Close();
+
+            // === 실시간 미리보기 갱신 ===
+            void UpdatePreview()
+            {
+                try
+                {
+                    // ApplyDarkTheme가 Grid/외곽 배경을 덮어쓰는 것을 막기 위해 매번 Transparent로 유지
+                    previewGrid.Background = System.Windows.Media.Brushes.Transparent;
+                    previewOuter.Background = System.Windows.Media.Brushes.Transparent;
+                    // 외곽 박스 자체는 약간 어두운 배경(빈 공간 표시용)
+                    previewBorder.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(40, 40, 40));
+
+                    // 기본 너비/높이 결정
+                    double baseW = 50, baseH = 50;
+                    if (!lockSize)
+                    {
+                        if (double.TryParse(wBox2.Text, out var pbw) && pbw > 0) baseW = pbw;
+                        if (double.TryParse(hBox2.Text, out var pbh) && pbh > 0) baseH = pbh;
+                    }
+                    else
+                    {
+                        baseW = FolderCellSize;
+                        baseH = FolderCellSize;
+                    }
+
+                    // 텍스트 정보
+                    string txt = labelTextBox.Text ?? string.Empty;
+                    bool hasText = !string.IsNullOrWhiteSpace(txt);
+                    bool inside = currentLabelPos == "이미지 오른쪽";
+
+                    // 글씨 색/글꼴: 안쪽/바깥쪽 라벨 모두 동일하게 먼저 적용
+                    System.Windows.Media.Brush fgBrush;
+                    if (selectedFgColor == null)
+                        fgBrush = (System.Windows.Application.Current.Resources["ForegroundBrush"] as System.Windows.Media.Brush)
+                                  ?? System.Windows.Media.Brushes.White;
+                    else
+                    {
+                        try
+                        {
+                            var fc = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(selectedFgColor);
+                            fgBrush = new System.Windows.Media.SolidColorBrush(fc);
+                        }
+                        catch { fgBrush = System.Windows.Media.Brushes.White; }
+                    }
+                    previewInnerLabel.Foreground = fgBrush;
+                    previewOuterLabel.Foreground = fgBrush;
+
+                    if (string.IsNullOrWhiteSpace(selectedFontFamily))
+                    {
+                        previewInnerLabel.ClearValue(System.Windows.Controls.TextBlock.FontFamilyProperty);
+                        previewOuterLabel.ClearValue(System.Windows.Controls.TextBlock.FontFamilyProperty);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var ff = new System.Windows.Media.FontFamily(selectedFontFamily);
+                            previewInnerLabel.FontFamily = ff;
+                            previewOuterLabel.FontFamily = ff;
+                        }
+                        catch { }
+                    }
+
+                    // 글씨 크기
+                    if (selectedFontSize.HasValue && selectedFontSize.Value > 0)
+                    {
+                        previewInnerLabel.FontSize = selectedFontSize.Value;
+                        previewOuterLabel.FontSize = selectedFontSize.Value;
+                    }
+                    else
+                    {
+                        previewInnerLabel.ClearValue(System.Windows.Controls.TextBlock.FontSizeProperty);
+                        previewOuterLabel.ClearValue(System.Windows.Controls.TextBlock.FontSizeProperty);
+                    }
+
+                    previewInnerLabel.Text = txt;
+                    previewOuterLabel.Text = txt;
+
+                    // 안쪽 버튼 박스 크기
+                    // Why: TextBlock.Measure는 다이얼로그 첫 표시 시점에 FontFamily 상속이 완성되지 않아
+                    // 0에 가까운 값을 반환하는 경우가 있다(첫 호출에서 텍스트 잘림 → 색 변경 후 정상화).
+                    // 측정에 의존하지 않고 스타일 2일 때 박스를 미리보기 영역 폭만큼 확보해 안정성 확보.
+                    double maxBoxW = previewBorder.Width - 4;
+                    double bw2v = (inside && hasText) ? maxBoxW : Math.Min(baseW, maxBoxW);
+                    double bh2v = baseH;
+                    bh2v = Math.Min(bh2v, previewBorder.Height - (hasText && !inside ? 24 : 4)); // 외부 라벨이 있으면 아래 공간 확보
+                    previewButtonBox.Width = bw2v;
+                    previewButtonBox.Height = bh2v;
+
+                    // 이미지 크기/위치 — 사용자가 입력한 너비/높이 그대로 적용(자동 캡 없음).
+                    // 미리보기 박스를 넘으면 ClipToBounds에 의해 잘려 시각적으로 안내된다.
+                    double piw = double.TryParse(iwBox2.Text, out var iv) && iv > 0 ? iv : 40;
+                    double pih = double.TryParse(ihBox2.Text, out var ih2v) && ih2v > 0 ? ih2v : 40;
+                    previewImage.Width = piw;
+                    previewImage.Height = pih;
+
+                    // 라벨 가시성/위치
+                    if (inside && hasText)
+                    {
+                        previewInnerLabel.Visibility = System.Windows.Visibility.Visible;
+                        previewOuterLabel.Visibility = System.Windows.Visibility.Collapsed;
+                        // 이미지는 왼쪽, 안쪽 라벨은 이미지 우측에 — 단일 셀 Grid이므로 텍스트의 Left margin을
+                        // 이미지가 차지하는 공간(left margin + width + gap)만큼 밀어 겹침을 방지한다.
+                        const double imgLeftMargin = 6;
+                        const double gap = 14;
+                        previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+                        previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                        previewImage.Margin = new Thickness(imgLeftMargin, 0, 0, 0);
+                        double textLeft = imgLeftMargin + previewImage.Width + gap;
+                        previewInnerLabel.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+                        previewInnerLabel.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                        previewInnerLabel.Margin = new Thickness(textLeft, 0, 6, 0);
+                    }
+                    else
+                    {
+                        previewInnerLabel.Visibility = System.Windows.Visibility.Collapsed;
+                        // 이미지 위치 = 사용자 선택
+                        switch (current2)
+                        {
+                            case "위":
+                                previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Top;
+                                previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+                                previewImage.Margin = new Thickness(0, 4, 0, 0);
+                                break;
+                            case "아래":
+                                previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Bottom;
+                                previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+                                previewImage.Margin = new Thickness(0, 0, 0, 4);
+                                break;
+                            case "왼쪽":
+                                previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+                                previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                                previewImage.Margin = new Thickness(8, 0, 0, 0);
+                                break;
+                            case "오른쪽":
+                                previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+                                previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                                previewImage.Margin = new Thickness(0, 0, 8, 0);
+                                break;
+                            default: // 중앙
+                                previewImage.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+                                previewImage.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+                                previewImage.Margin = new Thickness(0);
+                                break;
+                        }
+
+                        // 외부 라벨은 hasText일 때만 표시 (박스 밖 아래)
+                        previewOuterLabel.Visibility = hasText ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+                    }
+
+                    // 배경색은 안쪽 buttonBox에만 적용
+                    if (selectedBgColor == null)
+                    {
+                        previewButtonBox.Background = (System.Windows.Application.Current.Resources["ContextMenuBorderBrush"] as System.Windows.Media.Brush)
+                                                      ?? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(58, 58, 58));
+                    }
+                    else if (selectedBgColor == "transparent")
+                    {
+                        previewButtonBox.Background = System.Windows.Media.Brushes.Transparent;
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var bc = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(selectedBgColor);
+                            previewButtonBox.Background = new System.Windows.Media.SolidColorBrush(bc);
+                        }
+                        catch { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine("UpdatePreview error: " + ex);
+                }
+            }
+
+            // 이벤트 → 미리보기 갱신
+            labelTextBox.TextChanged += (_, _) => UpdatePreview();
+            wBox2.TextChanged += (_, _) => UpdatePreview();
+            hBox2.TextChanged += (_, _) => UpdatePreview();
+            iwBox2.TextChanged += (_, _) => UpdatePreview();
+            ihBox2.TextChanged += (_, _) => UpdatePreview();
+            foreach (var b in styleButtons) b.Click += (_, _) => UpdatePreview();
+            foreach (var sw in bgSwatches) sw.MouseLeftButtonDown += (_, _) => UpdatePreview();
+            foreach (var sw in fgSwatches) sw.MouseLeftButtonDown += (_, _) => UpdatePreview();
+            fontCombo.SelectionChanged += (_, _) => UpdatePreview();
+            fontCombo.LostFocus += (_, _) => UpdatePreview();
+            fontDefaultBtn.Click += (_, _) => UpdatePreview();
+            sizeBox.TextChanged += (_, _) => UpdatePreview();
+            sizeDefaultBtn.Click += (_, _) => UpdatePreview();
+            selectImageBtn.Click += (_, _) => UpdatePreview();
+
+            sizeDlg.Loaded += (_, _) => UpdatePreview();
+
             sizeDlg.Content = rootGrid;
             ApplyDarkTheme(sizeDlg);
+            // ApplyDarkTheme이 모든 버튼의 Background/BorderThickness를 덮어써서 선택 하이라이트가 사라지므로 재적용.
+            UpdateStyleButtonStyles();
             try { sizeDlg.ShowDialog(); }
             catch (Exception ex)
             {
@@ -7493,7 +8012,7 @@ ORDER BY 값 {sortDir}";
             if (newBtnHeight.HasValue) targetBtn.Height = newBtnHeight.Value;
             targetBtn.HorizontalContentAlignment = System.Windows.HorizontalAlignment.Stretch;
             targetBtn.VerticalContentAlignment = System.Windows.VerticalAlignment.Stretch;
-            var img = GetButtonImageControl(targetBtn) ?? new System.Windows.Controls.Image { Stretch = System.Windows.Media.Stretch.Uniform };
+            var img = GetButtonImageControl(targetBtn) ?? new System.Windows.Controls.Image { Stretch = System.Windows.Media.Stretch.Fill };
             img.Width = newImgWidth; img.Height = newImgHeight;
             img.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
             img.VerticalAlignment = System.Windows.VerticalAlignment.Center;
@@ -7505,18 +8024,32 @@ ORDER BY 값 {sortDir}";
                 case "왼쪽": img.HorizontalAlignment = System.Windows.HorizontalAlignment.Left; img.VerticalAlignment = System.Windows.VerticalAlignment.Center; img.Margin = new Thickness(15, 0, 0, 0); break;
                 case "오른쪽": img.HorizontalAlignment = System.Windows.HorizontalAlignment.Right; img.VerticalAlignment = System.Windows.VerticalAlignment.Center; img.Margin = new Thickness(0, 0, 15, 0); break;
             }
-            if (meta.LabelInside || targetBtn.Content is System.Windows.Controls.Grid)
+            bool hasText = !string.IsNullOrWhiteSpace(meta.LabelText);
+            if (meta.LabelInside && hasText)
             {
+                // 안쪽 라벨 + 이미지 → 그리드(좌측 이미지/우측 라벨) 분기
                 var grid = EnsureGridContentWithImage(targetBtn, out var ensuredImg);
                 ensuredImg.Width = img.Width; ensuredImg.Height = img.Height;
-                ensuredImg.HorizontalAlignment = img.HorizontalAlignment; ensuredImg.VerticalAlignment = img.VerticalAlignment; ensuredImg.Margin = img.Margin;
+                ensuredImg.HorizontalAlignment = img.HorizontalAlignment;
+                ensuredImg.VerticalAlignment = img.VerticalAlignment;
+                // 텍스트가 오른쪽일 때 위/아래/왼쪽 위치의 이미지는 좌측 여백을 동일하게 통일.
+                // 기존 왼쪽 정렬 15px 여백의 절반(약 8px)으로 줄여서 적용.
+                const double inLabelLeftMargin = 8;
+                switch (position)
+                {
+                    case "위": ensuredImg.Margin = new Thickness(inLabelLeftMargin, 4, 0, 0); break;
+                    case "아래": ensuredImg.Margin = new Thickness(inLabelLeftMargin, 0, 0, 4); break;
+                    case "왼쪽": ensuredImg.Margin = new Thickness(inLabelLeftMargin, 0, 0, 0); break;
+                    default: ensuredImg.Margin = img.Margin; break;
+                }
                 EnsureOrUpdateInButtonLabel(targetBtn, meta);
             }
             else
             {
+                // 텍스트가 없거나 LabelInside=false → 이미지를 버튼 콘텐츠로 단독 배치 (중앙 등 사용자가 선택한 위치)
                 if (img.Parent is System.Windows.Controls.Panel p) p.Children.Remove(img);
                 targetBtn.Content = img;
-                EnsureOrUpdateButtonLabel(canvas, targetBtn, meta);
+                if (hasText) EnsureOrUpdateButtonLabel(canvas, targetBtn, meta);
             }
         }
 
@@ -7573,6 +8106,8 @@ ORDER BY 값 {sortDir}";
         public bool BackgroundTransparent { get; set; } // legacy compat
         public string? BgColor { get; set; }           // null = default(theme), "transparent" = none, hex = custom
         public string? CustomFontFamily { get; set; }  // null = default(theme)
+        public double BaseWidth { get; set; }            // 디자인 다이얼로그의 사용자 입력 너비 (0이면 legacy → Width 사용)
+        public double BaseHeight { get; set; }
     }
 
     // MainWindow에 TabItem 추가 메서드 (partial class 확장용)
@@ -7613,6 +8148,9 @@ ORDER BY 값 {sortDir}";
             var chartMenuItem = new MenuItem { Header = "차트생성" };
             chartMenuItem.Click += CreateChartInBorder_Click;
             contextMenu.Items.Add(chartMenuItem);
+            var folderMenuItem = new MenuItem { Header = "폴더생성" };
+            folderMenuItem.Click += CreateFolderInBorder_Click;
+            contextMenu.Items.Add(folderMenuItem);
             border.ContextMenu = contextMenu;
             border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
             ApplySubtleScrollBarStyle(border);
@@ -7771,6 +8309,9 @@ ORDER BY 값 {sortDir}";
                     var chartMenuItem = new MenuItem { Header = "차트생성" };
                     chartMenuItem.Click += CreateChartInBorder_Click;
                     contextMenu.Items.Add(chartMenuItem);
+                    var folderMenuItem = new MenuItem { Header = "폴더생성" };
+                    folderMenuItem.Click += CreateFolderInBorder_Click;
+                    contextMenu.Items.Add(folderMenuItem);
                     border.ContextMenu = contextMenu;
                     border.ContextMenuOpening += DynamicButtonBorder_ContextMenuOpening;
                     ApplySubtleScrollBarStyle(border);
@@ -7802,10 +8343,10 @@ ORDER BY 값 {sortDir}";
             }
         }
 
-        private static void ApplySubtleScrollBarStyle(Border border)
+        private static void ApplySubtleScrollBarStyle(FrameworkElement element)
         {
             if (System.Windows.Application.Current.Resources["SlimScrollBarStyle"] is Style slim)
-                border.Resources[typeof(ScrollBar)] = slim;
+                element.Resources[typeof(ScrollBar)] = slim;
         }
     }
 }

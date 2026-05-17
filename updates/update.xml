@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
-  <version>1.4.3</version>
-  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.4.3/WpfApp2-v1.4.3.zip</url>
-  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.4.3</changelog>
-  <releaseNotes>- 메모리누수제거 </releaseNotes>
+  <version>1.4.4</version>
+  <url>https://github.com/Jh98JC/WpfApp1/releases/download/v1.4.4/WpfApp2-v1.4.4.zip</url>
+  <changelog>https://github.com/Jh98JC/WpfApp1/releases/tag/v1.4.4</changelog>
+  <releaseNotes>- 버튼ui 개선 </releaseNotes>
   <mandatory>true</mandatory>
 </item>
